@@ -1,0 +1,13 @@
+# secrets & credentials
+.env
+service-account.json
+bubberbanking-207a3f8d45da.json
+tokens.json
+
+# dependencies & build
+node_modules
+dist
+
+# editor / os
+.idea
+*.log

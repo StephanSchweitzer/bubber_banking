@@ -1,0 +1,24 @@
+{
+  "name": "bubber-banking",
+  "version": "1.0.0",
+  "description": "Pull bank transactions from Plaid and sync them into a Google Sheet.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "link": "tsx src/link.ts",
+    "sync": "tsx src/sync.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.1",
+    "plaid": "^27.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bubber Banking — Link a bank</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        max-width: 34rem;
+        margin: 4rem auto;
+        padding: 0 1.25rem;
+        color: #1a1a1a;
+        line-height: 1.5;
+      }
+      h1 { font-size: 1.4rem; }
+      button {
+        font-size: 1rem;
+        padding: 0.7rem 1.3rem;
+        border: 0;
+        border-radius: 8px;
+        background: #111;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status { margin-top: 1.5rem; white-space: pre-wrap; }
+      .ok { color: #0a7d28; }
+      .err { color: #b00020; }
+      code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Link a bank to Bubber Banking</h1>
+    <p>
+      Click below to connect an institution via Plaid. On success its access
+      token is saved to <code>tokens.json</code>. You can link several banks —
+      just repeat for each one.
+    </p>
+    <button id="link">Connect a bank</button>
+    <div id="status"></div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const btn = document.getElementById("link");
+
+      function setStatus(msg, cls) {
+        statusEl.textContent = msg;
+        statusEl.className = cls || "";
+      }
+
+      async function post(url, body) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {}),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+        return data;
+      }
+
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        setStatus("Requesting a Link token…");
+        try {
+          const { link_token } = await post("/api/create_link_token");
+          const handler = Plaid.create({
+            token: link_token,
+            onSuccess: async (public_token, metadata) => {
+              const name =
+                (metadata && metadata.institution && metadata.institution.name) ||
+                "Unknown institution";
+              setStatus("Exchanging token for " + name + "…");
+              try {
+                await post("/api/exchange_public_token", {
+                  public_token,
+                  institution_name: name,
+                });
+                setStatus(
+                  "✓ Linked " + name + ". Saved to tokens.json.\n" +
+                    "Link another bank, or close this tab and run `npm run sync`.",
+                  "ok"
+                );
+              } catch (e) {
+                setStatus("Failed to save token: " + e.message, "err");
+              }
+              btn.disabled = false;
+            },
+            onExit: (err) => {
+              setStatus(
+                err ? "Link exited: " + JSON.stringify(err) : "Link closed.",
+                err ? "err" : ""
+              );
+              btn.disabled = false;
+            },
+          });
+          setStatus("Opening Plaid Link…");
+          handler.open();
+        } catch (e) {
+          setStatus("Could not start Link: " + e.message, "err");
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
