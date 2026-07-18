@@ -116,7 +116,7 @@ export async function renderPeriods(accounts?: AccountSnapshot[]): Promise<void>
 
   // Budget: ensure the tab, read human targets, seed any newly-seen categories.
   await ensureBudgetTab(api, tabIds);
-  const { targets, knownCategories } = await readBudget(api);
+  const { monthlyBudget, targets, knownCategories } = await readBudget(api);
   const ledgerCategories = new Set(
     ledger.map((t) => t.category).filter(isRealCategory)
   );
@@ -141,6 +141,7 @@ export async function renderPeriods(accounts?: AccountSnapshot[]): Promise<void>
       txns: ledger,
       accounts: resolvedAccounts,
       budgets: targets,
+      monthlyBudget,
       takenAt,
     });
     await sheet.render(tab, view);

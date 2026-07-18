@@ -176,31 +176,35 @@ class GridBuilder {
 
   private overview(stats: PeriodView["overview"]): void {
     this.sectionLabel("Overview");
-    const labels: Cell[] = ["", "", "", "", ""];
-    const values: Cell[] = ["", "", "", "", ""];
-    stats.slice(0, COLS).forEach((s, i) => {
-      labels[i] = s.label;
-      values[i] = s.value;
-    });
-    const lr = this.push(labels);
-    this.rowFormat(lr, {
-      backgroundColor: C.labelBg,
-      horizontalAlignment: "CENTER",
-      wrapStrategy: "WRAP",
-      textFormat: { foregroundColor: C.headText, fontSize: 9 },
-    });
-    const vr = this.push(values);
-    this.rowFormat(vr, {
-      backgroundColor: C.labelBg,
-      horizontalAlignment: "CENTER",
-      numberFormat: { type: "NUMBER", pattern: CURRENCY },
-      textFormat: { bold: true, fontSize: 12 },
-    });
-    // Tone colours per stat cell.
-    stats.slice(0, COLS).forEach((s, i) => {
-      if (s.tone === "neutral") return;
-      this.cellTextColor(vr, i, s.tone === "good" ? C.good : C.bad);
-    });
+    // Render as label-row / value-row pairs, wrapping every COLS stats so more
+    // than five stats (e.g. when "Unallocated" is present) don't get dropped.
+    for (let start = 0; start < stats.length; start += COLS) {
+      const chunk = stats.slice(start, start + COLS);
+      const labels: Cell[] = ["", "", "", "", ""];
+      const values: Cell[] = ["", "", "", "", ""];
+      chunk.forEach((s, i) => {
+        labels[i] = s.label;
+        values[i] = s.value;
+      });
+      const lr = this.push(labels);
+      this.rowFormat(lr, {
+        backgroundColor: C.labelBg,
+        horizontalAlignment: "CENTER",
+        wrapStrategy: "WRAP",
+        textFormat: { foregroundColor: C.headText, fontSize: 9 },
+      });
+      const vr = this.push(values);
+      this.rowFormat(vr, {
+        backgroundColor: C.labelBg,
+        horizontalAlignment: "CENTER",
+        numberFormat: { type: "NUMBER", pattern: CURRENCY },
+        textFormat: { bold: true, fontSize: 12 },
+      });
+      chunk.forEach((s, i) => {
+        if (s.tone === "neutral") return;
+        this.cellTextColor(vr, i, s.tone === "good" ? C.good : C.bad);
+      });
+    }
   }
 
   private budgetBlock(lines: PeriodView["budget"]): void {

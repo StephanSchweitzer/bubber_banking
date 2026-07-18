@@ -180,12 +180,14 @@ export interface BuildPeriodViewInput {
   txns: LedgerTxn[];
   accounts: AccountSnapshot[];
   budgets: BudgetTarget[];
+  /** The human's total monthly budget pool, if set (drives "Unallocated"). */
+  monthlyBudget?: number | null;
   /** Human-readable "last updated" stamp, e.g. "2026-07-17 09:14". */
   takenAt: string;
 }
 
 export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
-  const { cadence, now, txns, accounts, budgets, takenAt } = input;
+  const { cadence, now, txns, accounts, budgets, monthlyBudget, takenAt } = input;
   const periodKey = periodKeyOf(now, cadence);
 
   // Transactions that fall in the current period for this cadence.
@@ -239,6 +241,18 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
       label: "Left to spend",
       value: leftToSpend,
       tone: leftToSpend < 0 ? "bad" : "good",
+    });
+  }
+  // On the monthly view, surface how much of the monthly pool is still unassigned
+  // to categories (the allocation model lives on the Budget tab). Monthly only —
+  // the pool is a monthly figure, so prorating it onto other cadences would mislead.
+  if (cadence === "monthly" && monthlyBudget != null) {
+    const allocated = round2(sum(budgets.map((b) => b.monthly)));
+    const unallocated = round2(monthlyBudget - allocated);
+    overview.push({
+      label: "Unallocated",
+      value: unallocated,
+      tone: unallocated < 0 ? "bad" : "neutral",
     });
   }
 

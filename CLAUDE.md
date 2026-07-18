@@ -91,7 +91,9 @@ Mon-start / this month / this year), stacked in a fixed 5-column grid
 
 1. **Title band** + reset hint / last-updated subtitle.
 2. **Overview** strip: `Cash on hand`, `Total owed`, `Available credit`,
-   `Spent this <period>`, and (when budgets exist) `Left to spend`.
+   `Spent this <period>`, and (when budgets exist) `Left to spend`. The monthly
+   tab also shows `Unallocated` (pool minus category allocations). The strip wraps
+   to a second label/value row past five stats.
 3. **Budget by category**: `Category` / `Budget` / `Spent` / `Left` / bar. Targets
    are **monthly**, prorated per cadence (daily = ÷ days-in-month, weekly = ×12/52,
    monthly = ×1, yearly = ×12). `Left` goes red when overspent.
@@ -115,6 +117,25 @@ needs the **Liabilities** product *and* cardholder consent on the item. Items li
 before Liabilities was added return `ADDITIONAL_CONSENT_REQUIRED` and those two
 columns stay blank until the card is re-linked (`npm run link`). Limits and balances
 come from `/accounts/balance/get` and always populate. Code degrades gracefully.
+
+## Budget tab layout (human-owned allocation cockpit)
+
+```
+A1 Monthly budget | B1  <- you type your monthly pool
+A2 Allocated      | B2  =SUM(B5:B)   (live)
+A3 Unallocated    | B3  =B1-B2       (live)
+A4 Category       | B4  Budget       (table header)
+A5 <category>     | B5  <target>     (you type per-category targets)
+...
+```
+
+B2/B3 are **live formulas** — allocated and what's-left update the instant a number
+changes, no sync needed. The sync READS B1 + the category targets (A5:B) and
+APPENDS newly-seen categories with a blank target; it never writes B1 or a target a
+human entered. `ensureBudgetTab` installs/repairs the block idempotently and
+migrates an old two-column `Category | Monthly Budget` layout by inserting three
+rows on top. Categories that look numeric are never seeded (guards a past
+column-shift bug).
 
 ## Conventions
 
