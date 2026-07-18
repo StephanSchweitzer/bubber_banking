@@ -45,6 +45,13 @@ export interface OverviewStat {
   label: string;
   value: number;
   tone: Tone;
+  /**
+   * When set, the period sheet renders this stat as a *live* formula (referencing
+   * the Budget tab / the tab's own budget block) instead of a baked-in number, so
+   * it tracks Budget-tab edits and new transactions without waiting for a sync.
+   * `value` remains the render-time snapshot (a fallback and the source of `tone`).
+   */
+  live?: "spent" | "leftToSpend" | "unallocated" | "projected" | "safeToday";
 }
 
 export interface BudgetLine {
@@ -232,15 +239,16 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
     { label: "Cash on hand", value: cash, tone: "neutral" },
     { label: "Total owed", value: owed, tone: owed > 0 ? "bad" : "neutral" },
     { label: "Available credit", value: round2(limit - owed), tone: "neutral" },
-    { label: `Spent this ${CADENCE_TITLE[cadence].toLowerCase()}`, value: spentTotal, tone: "neutral" },
+    { label: `Spent this ${CADENCE_TITLE[cadence].toLowerCase()}`, value: spentTotal, tone: "neutral", live: "spent" },
   ];
+  const totalTarget = round2(sum(budget.map((b) => b.target ?? 0)));
   if (hasBudgets) {
-    const totalTarget = round2(sum(budget.map((b) => b.target ?? 0)));
     const leftToSpend = round2(totalTarget - spentTotal);
     overview.push({
       label: "Left to spend",
       value: leftToSpend,
       tone: leftToSpend < 0 ? "bad" : "good",
+      live: "leftToSpend",
     });
   }
   // On the monthly view, surface how much of the monthly pool is still unassigned
@@ -253,6 +261,7 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
       label: "Unallocated",
       value: unallocated,
       tone: unallocated < 0 ? "bad" : "neutral",
+      live: "unallocated",
     });
   }
 

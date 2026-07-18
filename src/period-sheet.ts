@@ -38,9 +38,13 @@ const C = {
   bad: rgb(0xdc, 0x26, 0x26), // red-600
   neutral: rgb(0x0f, 0x17, 0x2a), // slate-900
   muted: rgb(0x94, 0xa3, 0xb8), // slate-400
-  barFull: rgb(0x25, 0x63, 0xeb), // blue-600
-  barOver: rgb(0xdc, 0x26, 0x26), // red-600
+  barFull: rgb(0x25, 0x63, 0xeb), // blue-600 — under budget
+  overSome: rgb(0xea, 0x58, 0x0c), // orange-600 — over budget by < 30%
+  overBad: rgb(0xdc, 0x26, 0x26), // red-600 — over budget by >= 30%
 };
+
+/** Over-budget threshold (as a fraction of the target) above which red wins. */
+const OVER_RED_THRESHOLD = 0.3;
 
 const CURRENCY = '"$"#,##0.00';
 const CURRENCY_NEG_RED = '"$"#,##0.00;[Red]-"$"#,##0.00';
@@ -63,11 +67,19 @@ export class PeriodSheet {
     b.build(view);
 
     // 1. Wipe old merges + formatting so a shrinking layout leaves nothing stale.
+    // Conditional-format rules aren't cleared by resetting userEnteredFormat, so
+    // delete every existing rule (index 0, repeated) before re-adding fresh ones,
+    // otherwise the over-budget colour rules pile up run after run.
     const grid = await this.gridSize(sheetId);
+    const clearRules: sheets_v4.Schema$Request[] = Array.from(
+      { length: grid.condRules },
+      () => ({ deleteConditionalFormatRule: { sheetId, index: 0 } })
+    );
     await this.api.spreadsheets.batchUpdate({
       spreadsheetId: config.google.sheetId,
       requestBody: {
         requests: [
+          ...clearRules,
           { unmergeCells: { range: { sheetId } } },
           {
             // These tabs may carry a frozen row/column from their previous life
@@ -110,26 +122,49 @@ export class PeriodSheet {
       requestBody: { values: b.matrix },
     });
 
-    // 3. Re-apply layout formatting.
+    // 2b. Overlay the live formulas (Budget/Spent/Left/bar + budget-derived overview
+    // stats). Written as a separate USER_ENTERED pass so the bulk RAW write above
+    // never risks re-parsing a transaction name/amount as a formula.
+    if (b.formulaCells.length > 0) {
+      await this.api.spreadsheets.values.batchUpdate({
+        spreadsheetId: config.google.sheetId,
+        requestBody: {
+          valueInputOption: "USER_ENTERED",
+          data: b.formulaCells.map((f) => ({
+            range: `${tab}!${a1(f.row, f.col)}`,
+            values: [[f.formula]],
+          })),
+        },
+      });
+    }
+
+    // 3. Re-apply layout formatting (incl. the over-budget conditional-format rules).
     await this.api.spreadsheets.batchUpdate({
       spreadsheetId: config.google.sheetId,
       requestBody: { requests: b.requests },
     });
   }
 
-  /** Current grid dimensions, so the format reset stays inside the sheet. */
-  private async gridSize(sheetId: number): Promise<{ rows: number; cols: number }> {
+  /** Grid dimensions + conditional-rule count, so resets stay inside the sheet. */
+  private async gridSize(
+    sheetId: number
+  ): Promise<{ rows: number; cols: number; condRules: number }> {
     const meta = await this.api.spreadsheets.get({
       spreadsheetId: config.google.sheetId,
-      fields: "sheets(properties(sheetId,gridProperties(rowCount,columnCount)))",
+      fields:
+        "sheets(properties(sheetId,gridProperties(rowCount,columnCount)),conditionalFormats)",
     });
     for (const s of meta.data.sheets ?? []) {
       if (s.properties?.sheetId === sheetId) {
         const gp = s.properties.gridProperties;
-        return { rows: gp?.rowCount ?? 1000, cols: gp?.columnCount ?? 26 };
+        return {
+          rows: gp?.rowCount ?? 1000,
+          cols: gp?.columnCount ?? 26,
+          condRules: s.conditionalFormats?.length ?? 0,
+        };
       }
     }
-    return { rows: 1000, cols: 26 };
+    return { rows: 1000, cols: 26, condRules: 0 };
   }
 }
 
@@ -140,10 +175,20 @@ export class PeriodSheet {
 class GridBuilder {
   matrix: Cell[][] = [];
   requests: sheets_v4.Schema$Request[] = [];
+  /** Cells to overwrite with live formulas (0-based row/col) after the RAW write. */
+  formulaCells: { row: number; col: number; formula: string }[] = [];
+
+  private cadence: PeriodView["cadence"] = "monthly";
+  /** 1-based first/last data rows of the budget block, once it's laid out. */
+  private budgetFirstRow: number | null = null;
+  private budgetLastRow: number | null = null;
+  /** Overview value cells that want a live formula, resolved once rows are known. */
+  private overviewLive: { row: number; col: number; kind: NonNullable<PeriodView["overview"][number]["live"]> }[] = [];
 
   constructor(private readonly sheetId: number) {}
 
   build(view: PeriodView): void {
+    this.cadence = view.cadence;
     this.titleBand(view.title, view.subtitle);
     this.spacer();
     this.overview(view.overview);
@@ -153,6 +198,9 @@ class GridBuilder {
       this.spacer();
       this.section(sec);
     }
+    // Now that the budget block's rows are known, wire up the live overview stats
+    // (Spent / Left to spend reference the block; Unallocated references Budget!B3).
+    this.resolveOverviewFormulas();
     this.columnWidths();
   }
 
@@ -201,9 +249,29 @@ class GridBuilder {
         textFormat: { bold: true, fontSize: 12 },
       });
       chunk.forEach((s, i) => {
+        if (s.live) this.overviewLive.push({ row: vr, col: i, kind: s.live });
         if (s.tone === "neutral") return;
         this.cellTextColor(vr, i, s.tone === "good" ? C.good : C.bad);
       });
+    }
+  }
+
+  /** Turn the flagged overview stats into live formulas (see `build`). */
+  private resolveOverviewFormulas(): void {
+    const { budgetFirstRow: f, budgetLastRow: l } = this;
+    for (const o of this.overviewLive) {
+      let formula: string | null = null;
+      if (o.kind === "unallocated") {
+        // Pool minus allocations already lives on the Budget tab as B3.
+        formula = "=Budget!$B$3";
+      } else if (f != null && l != null) {
+        // Spent = sum of the block's live Spent column; Left to spend = budget − spent.
+        formula =
+          o.kind === "spent"
+            ? `=SUM(C${f}:C${l})`
+            : `=IFERROR(SUM(B${f}:B${l})-SUM(C${f}:C${l}),0)`;
+      }
+      if (formula) this.formulaCells.push({ row: o.row, col: o.col, formula });
     }
   }
 
@@ -217,25 +285,65 @@ class GridBuilder {
     });
     this.cellAlign(head, 0, "LEFT");
 
+    const pro = this.prorationSuffix();
+    const firstRow0 = this.matrix.length; // 0-based row of the first category
     for (const b of lines) {
-      const bar = b.fill == null ? "" : renderBar(b.fill);
-      const row = this.push([
-        b.category,
-        b.target ?? "",
-        b.spent,
-        b.left ?? "",
-        bar,
-      ]);
+      // Category text only; Budget/Spent/Left/bar are overwritten by live formulas
+      // below so they track Budget-tab edits and new transactions without a sync.
+      const row = this.push([b.category, "", "", "", ""]);
+      const r = row + 1; // 1-based sheet row
+      // Budget: this category's monthly target from the Budget tab, prorated to this
+      // cadence. Blank when the category has no target (VLOOKUP miss or empty cell).
+      const budgetF =
+        `=IFERROR(IF(VLOOKUP($A${r},Budget!$A$5:$B,2,FALSE)="","",` +
+        `VLOOKUP($A${r},Budget!$A$5:$B,2,FALSE)${pro}),"")`;
+      // Spent: outflow magnitude for this category within the current period.
+      const spentF = this.spentFormula(r);
+      const leftF = `=IF(B${r}="","",B${r}-C${r})`;
+      // Proportional bar; full (and later recoloured) once spend passes the target.
+      const barF =
+        `=IF(OR(B${r}="",B${r}=0),"",REPT("█",ROUND(MIN(1,C${r}/B${r})*${BAR_WIDTH},0))` +
+        `&REPT("░",${BAR_WIDTH}-ROUND(MIN(1,C${r}/B${r})*${BAR_WIDTH},0)))`;
+      this.formulaCells.push(
+        { row, col: 1, formula: budgetF },
+        { row, col: 2, formula: spentF },
+        { row, col: 3, formula: leftF },
+        { row, col: 4, formula: barF }
+      );
       // Number formats: Budget/Spent plain, Left red-when-negative.
       this.cellNumber(row, 1, CURRENCY);
       this.cellNumber(row, 2, CURRENCY);
       this.cellNumber(row, 3, CURRENCY_NEG_RED);
       this.cellAlign(row, 0, "LEFT");
-      if (b.target == null) this.cellTextColor(row, 0, C.muted);
-      if (bar) this.cellTextColor(row, 4, b.over ? C.barOver : C.barFull);
     }
+    const lastRow0 = this.matrix.length; // exclusive
+    this.budgetFirstRow = firstRow0 + 1;
+    this.budgetLastRow = lastRow0; // 1-based inclusive == exclusive 0-based
+
+    // Bar column base colour (blue = under budget); conditional rules recolour it
+    // orange/red when overspent (see below).
+    this.requests.push({
+      repeatCell: {
+        range: { sheetId: this.sheetId, startRowIndex: firstRow0, endRowIndex: lastRow0, startColumnIndex: 4, endColumnIndex: 5 },
+        cell: { userEnteredFormat: { textFormat: { foregroundColor: C.barFull } } },
+        fields: "userEnteredFormat.textFormat.foregroundColor",
+      },
+    });
+
+    // Over-budget colouring on the Left + bar columns (D:E). Two live conditional
+    // rules keyed on the sheet's own live cells, so the colour follows the numbers
+    // the instant a budget or a transaction changes:
+    //   red    — overspent by >= 30% of the target,
+    //   orange — overspent by anything less.
+    // Red is added last at index 0 so it sits above orange and wins where both hit.
+    const f = this.budgetFirstRow;
+    this.requests.push(
+      this.overBudgetRule(firstRow0, lastRow0, `=AND($B${f}>0,$C${f}>$B${f})`, C.overSome),
+      this.overBudgetRule(firstRow0, lastRow0, `=AND($B${f}>0,($C${f}-$B${f})>=${OVER_RED_THRESHOLD}*$B${f})`, C.overBad)
+    );
+
     const note = this.push([
-      "The Budget column is yours to edit — the sync never overwrites it.",
+      "Budgets are set on the Budget tab — these figures update live as you edit them.",
       "",
       "",
       "",
@@ -246,6 +354,72 @@ class GridBuilder {
       horizontalAlignment: "LEFT",
       textFormat: { italic: true, fontSize: 9, foregroundColor: C.muted },
     });
+  }
+
+  /** How much of a monthly target applies to one period of this cadence (as a formula suffix). */
+  private prorationSuffix(): string {
+    switch (this.cadence) {
+      case "daily":
+        return "/DAY(EOMONTH(TODAY(),0))"; // ÷ days in the current month
+      case "weekly":
+        return "*12/52";
+      case "monthly":
+        return "*1";
+      case "yearly":
+        return "*12";
+    }
+  }
+
+  /**
+   * The live "Spent this period" formula for category row `r`, as an outflow
+   * magnitude scoped to the current period. Ledger dates are ISO *text*, which
+   * governs how each cadence is expressed:
+   *
+   *  - day / month / year use SUMIFS with an equality/`*` wildcard on the text —
+   *    text-matching works and full-column SUMIFS is cheap.
+   *  - week can't use that (a 7-day span isn't one prefix) and SUMIFS `>=`/`<=`
+   *    inequalities silently return 0 against text-stored dates, so the week uses
+   *    SUMPRODUCT, whose array `>=`/`<=` compares the text lexicographically (ISO
+   *    dates sort correctly) over a bounded range.
+   */
+  private spentFormula(r: number): string {
+    if (this.cadence === "weekly") {
+      const mon = `TEXT(TODAY()-WEEKDAY(TODAY(),3),"yyyy-mm-dd")`;
+      const sun = `TEXT(TODAY()-WEEKDAY(TODAY(),3)+6,"yyyy-mm-dd")`;
+      return (
+        `=IFERROR(SUMPRODUCT((Transactions!$F$2:$F$10000=$A${r})` +
+        `*(Transactions!$B$2:$B$10000>=${mon})*(Transactions!$B$2:$B$10000<=${sun})` +
+        `*(Transactions!$E$2:$E$10000<0)*(-Transactions!$E$2:$E$10000)),0)`
+      );
+    }
+    const crit =
+      this.cadence === "daily"
+        ? `,Transactions!$B:$B,TEXT(TODAY(),"yyyy-mm-dd")`
+        : this.cadence === "monthly"
+        ? `,Transactions!$B:$B,TEXT(TODAY(),"yyyy-mm")&"*"`
+        : `,Transactions!$B:$B,TEXT(TODAY(),"yyyy")&"*"`; // yearly
+    return (
+      `=IFERROR(-SUMIFS(Transactions!$E:$E,Transactions!$F:$F,$A${r},` +
+      `Transactions!$E:$E,"<0"${crit}),0)`
+    );
+  }
+
+  /** A conditional-format rule tinting D:E of the budget block when `formula` holds. */
+  private overBudgetRule(startRow0: number, endRow0: number, formula: string, color: Rgb): sheets_v4.Schema$Request {
+    return {
+      addConditionalFormatRule: {
+        index: 0,
+        rule: {
+          ranges: [
+            { sheetId: this.sheetId, startRowIndex: startRow0, endRowIndex: endRow0, startColumnIndex: 3, endColumnIndex: 5 },
+          ],
+          booleanRule: {
+            condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] },
+            format: { textFormat: { foregroundColor: color, bold: true } },
+          },
+        },
+      },
+    };
   }
 
   private section(sec: PeriodView["sections"][number]): void {
@@ -420,10 +594,15 @@ class GridBuilder {
 
 // --- helpers ---------------------------------------------------------------
 
-/** A proportional bar drawn with block glyphs, e.g. "████████░░░░". */
-function renderBar(fill: number): string {
-  const filled = Math.round(Math.max(0, Math.min(1, fill)) * BAR_WIDTH);
-  return "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled);
+/** 0-based (row, col) -> A1 address, e.g. (4, 1) -> "B5". */
+function a1(row: number, col: number): string {
+  let c = col;
+  let letters = "";
+  do {
+    letters = String.fromCharCode(65 + (c % 26)) + letters;
+    c = Math.floor(c / 26) - 1;
+  } while (c >= 0);
+  return `${letters}${row + 1}`;
 }
 
 function padRow(cells: Cell[]): Cell[] {
