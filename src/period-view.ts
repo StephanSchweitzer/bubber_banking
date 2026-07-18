@@ -89,6 +89,8 @@ export interface PeriodView {
   subtitle: string; // reset hint + last-updated
   overview: OverviewStat[];
   budget: BudgetLine[];
+  /** The biggest outflows this period — a "where did it go?" strip. */
+  topTxns: TxnLine[];
   /**
    * Budgeted category names for the year-to-date rollover table (monthly tab only;
    * empty on other cadences). The per-category "banked" figure is a live formula.
@@ -333,6 +335,13 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
     txnsByLabel.get(label)!.push(t);
   }
 
+  // --- "Where did it go?" — biggest outflows this period ------------------
+  const topTxns: TxnLine[] = inPeriod
+    .filter((t) => t.amount < 0 && isSpendCategory(t.category))
+    .sort((a, b) => a.amount - b.amount) // most negative (largest outflow) first
+    .slice(0, 5)
+    .map((t) => ({ date: t.date, name: t.name, merchant: t.merchant, amount: t.amount, category: t.category }));
+
   // --- Rollover (monthly only) --------------------------------------------
   // Budgeted categories carry a year-to-date "banked" figure (see period-sheet):
   // target × months-elapsed − spent-YTD. Positive = surplus banked, negative = hole.
@@ -369,6 +378,7 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
     subtitle: `${CADENCE_RESET[cadence]} · updated ${takenAt}`,
     overview,
     budget,
+    topTxns,
     rollover,
     sections,
     hasBudgets,

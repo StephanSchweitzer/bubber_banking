@@ -198,6 +198,10 @@ class GridBuilder {
       this.spacer();
       this.rolloverBlock(view.rollover);
     }
+    if (view.topTxns.length > 0) {
+      this.spacer();
+      this.topSpend(view.topTxns);
+    }
     for (const sec of view.sections) {
       this.spacer();
       this.section(sec);
@@ -491,6 +495,43 @@ class GridBuilder {
     this.rowFormat(note, {
       horizontalAlignment: "LEFT",
       textFormat: { italic: true, fontSize: 9, foregroundColor: C.muted },
+    });
+  }
+
+  /** "Biggest this <period>" — the largest few outflows, static (data-driven). */
+  private topSpend(txns: PeriodView["topTxns"]): void {
+    const noun = { daily: "day", weekly: "week", monthly: "month", yearly: "year" }[this.cadence];
+    this.sectionLabel(`Biggest this ${noun}`);
+    const colHead = this.push(["Date", "Name", "Merchant", "Amount", "Category"]);
+    this.rowFormat(colHead, {
+      backgroundColor: C.headBg,
+      horizontalAlignment: "LEFT",
+      textFormat: { foregroundColor: C.headText, fontSize: 9 },
+    });
+    this.cellAlign(colHead, 3, "RIGHT");
+
+    const firstDataRow = this.matrix.length;
+    for (const t of txns) {
+      this.push([t.date, t.name, t.merchant, t.amount, t.category]);
+    }
+    const lastDataRow = this.matrix.length; // exclusive
+    this.requests.push({
+      repeatCell: {
+        range: {
+          sheetId: this.sheetId,
+          startRowIndex: firstDataRow,
+          endRowIndex: lastDataRow,
+          startColumnIndex: 3,
+          endColumnIndex: 4,
+        },
+        cell: {
+          userEnteredFormat: {
+            horizontalAlignment: "RIGHT",
+            numberFormat: { type: "NUMBER", pattern: AMOUNT_SIGNED },
+          },
+        },
+        fields: "userEnteredFormat(horizontalAlignment,numberFormat)",
+      },
     });
   }
 
