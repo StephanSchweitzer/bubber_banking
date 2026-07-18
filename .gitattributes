@@ -1,0 +1,4 @@
+# Shell scripts run on the Linux droplet. CRLF line endings would break them with
+# "bad interpreter: /usr/bin/env bash^M", so pin them to LF regardless of the
+# committer's core.autocrlf setting.
+*.sh text eol=lf

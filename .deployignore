@@ -1,0 +1,19 @@
+# Paths never uploaded to the server by the deploy workflow.
+#
+# NOTE: these are also protected from deletion. `rsync --delete` leaves excluded
+# paths on the receiver alone, which is exactly what we want for the secrets that
+# live only on the droplet. Never add --delete-excluded to the workflow.
+
+.git
+.github
+.idea
+.claude
+node_modules
+
+# secrets — these exist only on the server, never in the repo
+.env
+tokens.json
+service-account.json
+bubberbanking-*.json
+
+*.log

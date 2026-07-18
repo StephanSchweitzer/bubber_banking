@@ -1,0 +1,56 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time. Never cancel a run mid-flight — it could leave the
+# server between the upload and the swap.
+concurrency:
+  group: deploy-bubber-banking
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /home/deploy/apps/bubber-banking
+  STAGE_DIR: /home/deploy/staging/bubber-banking
+  LOCK: /home/deploy/.locks/bubber-banking.lock
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Gate. This service moves real money data into a real spreadsheet on a
+      # cron with nobody watching, so a commit that doesn't compile must never
+      # reach the droplet.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Upload to staging
+        run: |
+          rsync -az --delete \
+            --exclude-from=.deployignore \
+            -e 'ssh -i ~/.ssh/id_ed25519' \
+            ./ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${STAGE_DIR}/"
+
+      - name: Promote to live
+        run: |
+          ssh -i ~/.ssh/id_ed25519 \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "APP_DIR='${APP_DIR}' STAGE_DIR='${STAGE_DIR}' LOCK='${LOCK}' bash '${STAGE_DIR}/deploy/promote.sh'"
