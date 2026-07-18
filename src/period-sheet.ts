@@ -1,5 +1,5 @@
 import { sheets_v4 } from "googleapis";
-import { config } from "./config";
+import { config, PERIOD_TABS } from "./config";
 import { PeriodView } from "./period-view";
 
 /**
@@ -264,6 +264,14 @@ class GridBuilder {
       if (o.kind === "unallocated") {
         // Pool minus allocations already lives on the Budget tab as B3.
         formula = "=Budget!$B$3";
+      } else if (o.kind === "safeToday") {
+        // Monthly pool (Budget B1) − month-to-date spend, ÷ days left in the month.
+        // Month spend is the Monthly tab's "Spent this month" overview cell, which
+        // the fixed layout pins at D6 (row 6 = first overview value row, col D = the
+        // 4th stat). MAX(0,…) so an overspent month reads $0, not negative.
+        formula =
+          `=IFERROR(MAX(0,(Budget!$B$1-'${PERIOD_TABS.monthly}'!$D$6))` +
+          `/(DAY(EOMONTH(TODAY(),0))-DAY(TODAY())+1),0)`;
       } else if (f != null && l != null) {
         // The rest reference the tab's own live budget block.
         formula =

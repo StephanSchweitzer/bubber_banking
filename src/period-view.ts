@@ -290,6 +290,20 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
       live: "projected",
     });
   }
+  // "Safe to spend today" (daily only): the monthly pool minus month-to-date spend,
+  // spread over the days left in the month — one per-day number that keeps you on
+  // track. Uses the pool (Budget B1), not just what's been allocated to categories.
+  if (cadence === "daily" && monthlyBudget != null) {
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    let monthSpent = 0;
+    for (const t of txns) {
+      if (t.amount >= 0 || !isSpendCategory(t.category)) continue;
+      if (t.date.startsWith(monthKey)) monthSpent += -t.amount;
+    }
+    const daysLeft = daysInMonth(now) - now.getDate() + 1;
+    const safe = round2(Math.max(0, (monthlyBudget - round2(monthSpent)) / daysLeft));
+    overview.push({ label: "Safe to spend today", value: safe, tone: "good", live: "safeToday" });
+  }
   // On the monthly view, surface how much of the monthly pool is still unassigned
   // to categories (the allocation model lives on the Budget tab). Monthly only —
   // the pool is a monthly figure, so prorating it onto other cadences would mislead.
