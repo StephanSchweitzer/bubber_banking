@@ -36,19 +36,45 @@ async function writeTokens(tokens: ItemToken[]): Promise<void> {
 }
 
 /**
- * Add a newly linked item without clobbering existing ones.
- * If the item_id already exists, its record is refreshed (access_token /
- * institution updated) but its cursor is preserved.
+ * Add a newly linked item without clobbering *other* institutions.
+ *
+ * Re-linking is the expected way to grant a new product's consent (e.g.
+ * Liabilities) to a card. Plaid's standard Link flow mints a fresh item_id each
+ * time, so we dedupe by institution instead:
+ *   - Same item_id  → refresh access_token in place, keep the cursor.
+ *   - Same institution_name, different item_id (a genuine re-link) → REPLACE the
+ *     old record: adopt the new item_id + access_token and reset the cursor to
+ *     null, so the next sync re-pulls cleanly against the new item. This prevents
+ *     the duplicate-item double-counting a naive append would cause.
+ *   - Otherwise → append as a new institution.
+ *
+ * (This setup treats one institution as one login. If you ever link two distinct
+ * logins at the same institution, the second would replace the first — not a case
+ * that exists here.)
  */
 export async function addToken(token: Omit<ItemToken, "cursor">): Promise<void> {
   const tokens = await readTokens();
-  const existing = tokens.find((t) => t.item_id === token.item_id);
-  if (existing) {
-    existing.access_token = token.access_token;
-    existing.institution_name = token.institution_name;
-  } else {
-    tokens.push({ ...token, cursor: null });
+
+  const byId = tokens.find((t) => t.item_id === token.item_id);
+  if (byId) {
+    byId.access_token = token.access_token;
+    byId.institution_name = token.institution_name;
+    await writeTokens(tokens);
+    return;
   }
+
+  const byInstitution = tokens.find(
+    (t) => t.institution_name === token.institution_name
+  );
+  if (byInstitution) {
+    byInstitution.item_id = token.item_id;
+    byInstitution.access_token = token.access_token;
+    byInstitution.cursor = null; // new item — re-pull from scratch
+    await writeTokens(tokens);
+    return;
+  }
+
+  tokens.push({ ...token, cursor: null });
   await writeTokens(tokens);
 }
 
