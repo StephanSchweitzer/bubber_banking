@@ -72,3 +72,6 @@ export const BALANCE_HISTORY_TAB = "Balance History";
  * blank target, but NEVER overwrites a value a human has entered.
  */
 export const BUDGET_TAB = "Budget";
+
+/** Code-written user manual tab (kept in sync with the real layout each run). */
+export const INSTRUCTIONS_TAB = "Instructions";

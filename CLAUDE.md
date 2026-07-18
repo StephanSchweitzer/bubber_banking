@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-Guidance for Claude Code (and humans) working in this repo.
+Guidance for Claude Code (and humans) working in this repo. **This file is
+developer-facing** — the end-user manual lives in [GUIDE.md](GUIDE.md) and is also
+auto-written into the sheet's **Instructions** tab each run (`instructions.ts`).
+Don't put end-user how-to here.
 
 ## ⚠️ This is a real, live service — not a demo
 
@@ -59,16 +62,18 @@ the current shape (display-signed amounts, humanized categories).
 | `snapshot.ts` | Balance-history entry point; exports `runSnapshot()` → hidden **Balance History** tab. |
 | `period-view.ts` | Pure shaping for the period tabs: `buildPeriodView` (overview / budget-by-category / per-account sections), `humanizeCategory`, `prorationFactor`, spend classification. |
 | `period-sheet.ts` | `PeriodSheet` — renders a `PeriodView` into a tab (merged bands, budget bars, sign-aware currency). Clear+rewrite each run. |
-| `budget.ts` | Reads the human **Budget** tab (category → monthly target) and append-only seeds newly-seen categories. Never overwrites human cells. |
-| `periods.ts` | Mode 4: reads the ledger + budget + balances and renders the four period tabs. Exports `renderPeriods()`. |
+| `budget.ts` | Owns the **Budget** tab allocation cockpit: installs the block, reads pool + targets, append-only seeds categories, and writes the live Spent/Left formulas. Never overwrites human cells (B1 or targets). |
+| `instructions.ts` | Writes the user manual into the **Instructions** tab (code-owned, rewritten each run so it can't drift). |
+| `periods.ts` | Mode 4: reads the ledger + budget + balances, renders the four period tabs, refreshes budget formulas, and writes the Instructions tab. Exports `renderPeriods()`. |
 
 ## Invariants — keep these true
 
 - **The writer only touches its own tabs**: `Transactions`, the four period tabs
-  (`Daily`/`Weekly`/`Monthly`/`Yearly`), and the hidden `Balance History` tab. The
-  **Budget** tab is human-owned: the sync may **read** its targets and **append**
-  newly-discovered categories with a blank target, but must **never overwrite** a
-  cell a human has filled in.
+  (`Daily`/`Weekly`/`Monthly`/`Yearly`), the hidden `Balance History` tab, and the
+  `Instructions` tab. On the **Budget** tab, columns A+B are human-owned (the sync
+  may **read** targets and **append** new categories with a blank target, but must
+  **never overwrite** B1 or a human-entered target); columns C+D are code-owned
+  live formulas (Spent/Left), safe to rewrite each run.
 - **Idempotent / re-runnable**: transactions upsert keyed on `transaction_id`;
   Balance History rows upsert keyed on the day; the period tabs are fully
   cleared and re-rendered each run. Re-running never duplicates.
@@ -124,18 +129,20 @@ come from `/accounts/balance/get` and always populate. Code degrades gracefully.
 A1 Monthly budget | B1  <- you type your monthly pool
 A2 Allocated      | B2  =SUM(B5:B)   (live)
 A3 Unallocated    | B3  =B1-B2       (live)
-A4 Category       | B4  Budget       (table header)
-A5 <category>     | B5  <target>     (you type per-category targets)
+A4 Category | B4 Budget | C4 Spent (this month) | D4 Left   (table header)
+A5 <category> | B5 <target> | C5 =SUMIFS(...) | D5 =B5-C5
 ...
 ```
 
-B2/B3 are **live formulas** — allocated and what's-left update the instant a number
-changes, no sync needed. The sync READS B1 + the category targets (A5:B) and
-APPENDS newly-seen categories with a blank target; it never writes B1 or a target a
-human entered. `ensureBudgetTab` installs/repairs the block idempotently and
-migrates an old two-column `Category | Monthly Budget` layout by inserting three
-rows on top. Categories that look numeric are never seeded (guards a past
-column-shift bug).
+B2/B3 and C/D are **live formulas** — allocated, unallocated, spent, and left all
+update the instant a number changes, no sync needed. C (Spent) is a month-to-date
+`SUMIFS` over the ledger keyed on category + a `TEXT(TODAY(),"yyyy-mm")&"*"`
+wildcard (ledger dates are ISO text, so no date-serial math). The sync READS B1 +
+targets (A5:B), APPENDS newly-seen categories (blank target), and rewrites C/D via
+`writeBudgetFormulas`; it never writes B1 or a human target. `ensureBudgetTab`
+installs/repairs the block idempotently and migrates an old two-column layout by
+inserting three rows on top. Numeric-looking categories are never seeded (guards a
+past column-shift bug).
 
 ## Conventions
 

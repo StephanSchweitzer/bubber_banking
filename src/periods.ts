@@ -4,7 +4,8 @@ import { readTokens } from "./tokens";
 import { AccountSnapshot, Cadence, fetchSnapshot } from "./balances";
 import { buildPeriodView, humanizeCategory, LedgerTxn } from "./period-view";
 import { PeriodSheet } from "./period-sheet";
-import { ensureBudgetTab, readBudget, seedCategories } from "./budget";
+import { ensureBudgetTab, readBudget, seedCategories, writeBudgetFormulas } from "./budget";
+import { writeInstructions } from "./instructions";
 
 /**
  * Renders the four period tabs (Daily / Weekly / Monthly / Yearly) as current-
@@ -124,6 +125,8 @@ export async function renderPeriods(accounts?: AccountSnapshot[]): Promise<void>
   if (added.length > 0) {
     console.log(`Periods: seeded ${added.length} new budget categor(ies): ${added.join(", ")}`);
   }
+  // Refresh the live Spent/Left formulas so they cover every category row.
+  await writeBudgetFormulas(api);
 
   const takenAt = now.toISOString().replace("T", " ").slice(0, 16); // "YYYY-MM-DD HH:MM"
   const sheet = new PeriodSheet(api, tabIds);
@@ -145,6 +148,14 @@ export async function renderPeriods(accounts?: AccountSnapshot[]): Promise<void>
       takenAt,
     });
     await sheet.render(tab, view);
+  }
+
+  // Keep the user manual in sync with the layout (best-effort — a failure here
+  // must not fail the render the tabs actually depend on).
+  try {
+    await writeInstructions(api, tabIds);
+  } catch (err: unknown) {
+    console.error("Instructions tab update failed:", (err as any)?.response?.data ?? err);
   }
 
   console.log(

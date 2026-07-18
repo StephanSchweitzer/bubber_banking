@@ -6,18 +6,21 @@ import { BudgetTarget } from "./period-view";
  * The Budget tab is the one place a human owns — and now the allocation cockpit.
  * Layout:
  *
- *   A1 Monthly budget   | B1  <- you type your monthly pool here
- *   A2 Allocated        | B2  =SUM(B5:B)   (live: total assigned to categories)
- *   A3 Unallocated      | B3  =B1-B2       (live: what's left to assign)
- *   A4 Category         | B4  Budget       (table header)
- *   A5 <category>       | B5  <target>     (you type per-category targets)
+ *   A1 Monthly budget | B1  <- you type your monthly pool here
+ *   A2 Allocated      | B2  =SUM(B5:B)   (live: total assigned to categories)
+ *   A3 Unallocated    | B3  =B1-B2       (live: what's left to assign)
+ *   A4 Category | B4 Budget | C4 Spent (this month) | D4 Left   (table header)
+ *   A5 <cat>    | B5 <target> | C5 =SUMIFS(...)       | D5 =B5-C5
  *   ...
  *
- * B2/B3 are real formulas, so "allocated" and "what's left" update the instant you
- * edit a number — no sync required. The sync only ever:
- *   - READS the total (B1) and the per-category targets (A5:B), and
- *   - APPENDS categories it newly discovers (with a blank target),
- * and it NEVER overwrites B1 or a target a human has entered.
+ * Column ownership: A + B are HUMAN-owned (category name is auto-seeded, target is
+ * typed). C + D are CODE-owned live formulas — Spent is a month-to-date SUMIFS over
+ * the Transactions ledger, Left is Budget − Spent. Every figure updates the instant
+ * a number changes; C/D need no sync (they recompute from the ledger live).
+ *
+ * The sync only ever: READS the total (B1) + per-category targets (A5:B), APPENDS
+ * newly-discovered categories (blank target), and (re)writes the C/D formulas. It
+ * NEVER overwrites B1 or a target a human has entered.
  */
 
 const LABEL_BUDGET = "Monthly budget";
@@ -25,6 +28,8 @@ const LABEL_ALLOCATED = "Allocated";
 const LABEL_UNALLOCATED = "Unallocated";
 const TABLE_CATEGORY = "Category";
 const TABLE_AMOUNT = "Budget";
+const TABLE_SPENT = "Spent (this month)";
+const TABLE_LEFT = "Left";
 
 const DATA_START_ROW = 5; // first category row (1-based)
 const ALLOCATED_FORMULA = "=SUM(B5:B)";
@@ -101,6 +106,10 @@ export async function ensureBudgetTab(
           range: `${BUDGET_TAB}!B2:B4`,
           values: [[ALLOCATED_FORMULA], [UNALLOCATED_FORMULA], [TABLE_AMOUNT]],
         },
+        {
+          range: `${BUDGET_TAB}!C4:D4`,
+          values: [[TABLE_SPENT, TABLE_LEFT]],
+        },
       ],
     },
   });
@@ -167,6 +176,42 @@ export async function seedCategories(
   return toAdd;
 }
 
+/**
+ * (Re)write the live Spent/Left formulas (columns C/D) for every category row.
+ * Spent is a month-to-date SUMIFS over the Transactions ledger for that category
+ * (outflows only — amounts are negative for spend, so we negate the sum). Left is
+ * Budget − Spent, blank when no target is set. These are code-owned: overwriting
+ * them each run is safe because they hold formulas, not human input.
+ *
+ * Dates in the ledger are ISO text ("YYYY-MM-DD"), so a `"yyyy-mm"&"*"` wildcard
+ * cleanly scopes to the current month without any date-serial math.
+ */
+export async function writeBudgetFormulas(api: sheets_v4.Sheets): Promise<void> {
+  const colA = await api.spreadsheets.values.get({
+    spreadsheetId: config.google.sheetId,
+    range: `${BUDGET_TAB}!A${DATA_START_ROW}:A`,
+  });
+  const count = colA.data.values?.length ?? 0;
+  if (count === 0) return;
+  const lastRow = DATA_START_ROW - 1 + count;
+
+  const rows: string[][] = [];
+  for (let r = DATA_START_ROW; r <= lastRow; r++) {
+    rows.push([
+      `=IFERROR(-SUMIFS(Transactions!$E:$E,Transactions!$F:$F,$A${r},` +
+        `Transactions!$B:$B,TEXT(TODAY(),"yyyy-mm")&"*",Transactions!$E:$E,"<0"),0)`,
+      `=IF($B${r}="","",$B${r}-$C${r})`,
+    ]);
+  }
+
+  await api.spreadsheets.values.update({
+    spreadsheetId: config.google.sheetId,
+    range: `${BUDGET_TAB}!C${DATA_START_ROW}:D${lastRow}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: rows },
+  });
+}
+
 /** Style the allocation block: bold labels, currency, a highlighted input cell. */
 async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<void> {
   const slate700 = rgb(0x33, 0x41, 0x55);
@@ -191,16 +236,25 @@ async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<
       numberFormat: { type: "NUMBER", pattern: CURRENCY_NEG_RED },
       textFormat: { bold: true },
     }),
-    // Row 4 table header band.
-    cell(sheetId, 3, 4, 0, 2, {
+    // Row 4 table header band (Category | Budget | Spent | Left).
+    cell(sheetId, 3, 4, 0, 4, {
       backgroundColor: slate700,
       textFormat: { bold: true, foregroundColor: white },
+      wrapStrategy: "WRAP",
     }),
-    // Category target column (B5:B) currency.
+    // Budget + Spent columns (B5:C) plain currency.
     {
       repeatCell: {
-        range: { sheetId, startRowIndex: 4, startColumnIndex: 1, endColumnIndex: 2 },
+        range: { sheetId, startRowIndex: 4, startColumnIndex: 1, endColumnIndex: 3 },
         cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: CURRENCY } } },
+        fields: "userEnteredFormat(numberFormat)",
+      },
+    },
+    // Left column (D5:D) currency, red when negative (overspent).
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 4, startColumnIndex: 3, endColumnIndex: 4 },
+        cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: CURRENCY_NEG_RED } } },
         fields: "userEnteredFormat(numberFormat)",
       },
     },
@@ -214,8 +268,8 @@ async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<
     },
     {
       updateDimensionProperties: {
-        range: { sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: 2 },
-        properties: { pixelSize: 140 },
+        range: { sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: 4 },
+        properties: { pixelSize: 130 },
         fields: "pixelSize",
       },
     },
