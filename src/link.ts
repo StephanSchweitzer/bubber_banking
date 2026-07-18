@@ -28,7 +28,9 @@ app.post("/api/create_link_token", async (_req, res) => {
     const response = await plaidClient.linkTokenCreate({
       user: { client_user_id: "bubber-banking-local-user" },
       client_name: "Bubber Banking",
-      products: [Products.Transactions],
+      // Transactions powers the ledger; Liabilities powers the credit-card
+      // payment-due / minimum-payment columns on the balance snapshot tabs.
+      products: [Products.Transactions, Products.Liabilities],
       country_codes: [CountryCode.Us],
       language: "en",
     });

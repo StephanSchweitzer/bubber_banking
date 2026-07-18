@@ -7,6 +7,7 @@
   "scripts": {
     "link": "tsx src/link.ts",
     "sync": "tsx src/sync.ts",
+    "snapshot": "tsx src/snapshot.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

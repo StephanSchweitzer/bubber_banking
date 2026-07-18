@@ -2,6 +2,7 @@ import { RemovedTransaction, Transaction } from "plaid";
 import { plaidClient } from "./plaid";
 import { readTokens, updateCursor, ItemToken } from "./tokens";
 import { TransactionsSheet, SheetRow } from "./sheets";
+import { runSnapshot } from "./snapshot";
 
 /**
  * Mode 2 — headless sync. For every linked item, pull incremental changes from
@@ -120,9 +121,21 @@ async function main(): Promise<void> {
 
   console.log(
     failures === 0
-      ? "Sync complete."
-      : `Sync complete with ${failures} item failure(s).`
+      ? "Transaction sync complete."
+      : `Transaction sync complete with ${failures} item failure(s).`
   );
+
+  // Record a balance snapshot too, so one cron entry keeps everything fresh.
+  // Best-effort: a snapshot failure must not fail the transaction sync.
+  try {
+    await runSnapshot();
+  } catch (err: unknown) {
+    console.error(
+      "Balance snapshot failed (transactions were still synced):",
+      (err as any)?.response?.data ?? (err as Error)?.message ?? err
+    );
+  }
+
   // Non-zero exit on any failure so cron / monitoring can notice.
   if (failures > 0) process.exitCode = 1;
 }

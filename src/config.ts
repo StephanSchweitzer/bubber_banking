@@ -45,3 +45,14 @@ export const config = {
 } as const;
 
 export const TRANSACTIONS_TAB = "Transactions";
+
+/**
+ * Balance-snapshot tabs. Each run appends/updates one row per period so the tab
+ * builds a time series of credit limits, payments due, and cash on hand.
+ */
+export const BALANCE_TABS = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+} as const;
