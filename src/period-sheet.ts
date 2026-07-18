@@ -265,13 +265,29 @@ class GridBuilder {
         // Pool minus allocations already lives on the Budget tab as B3.
         formula = "=Budget!$B$3";
       } else if (f != null && l != null) {
-        // Spent = sum of the block's live Spent column; Left to spend = budget − spent.
+        // The rest reference the tab's own live budget block.
         formula =
           o.kind === "spent"
             ? `=SUM(C${f}:C${l})`
-            : `=IFERROR(SUM(B${f}:B${l})-SUM(C${f}:C${l}),0)`;
+            : o.kind === "leftToSpend"
+            ? `=IFERROR(SUM(B${f}:B${l})-SUM(C${f}:C${l}),0)`
+            : /* projected */ `=IFERROR(SUM(C${f}:C${l})/(${this.elapsedFormula()}),0)`;
       }
       if (formula) this.formulaCells.push({ row: o.row, col: o.col, formula });
+    }
+  }
+
+  /** How far through the current period we are, in (0, 1], as a live formula. */
+  private elapsedFormula(): string {
+    switch (this.cadence) {
+      case "weekly":
+        return "(WEEKDAY(TODAY(),3)+1)/7";
+      case "monthly":
+        return "DAY(TODAY())/DAY(EOMONTH(TODAY(),0))";
+      case "yearly":
+        return "(TODAY()-DATE(YEAR(TODAY()),1,1)+1)/(DATE(YEAR(TODAY())+1,1,1)-DATE(YEAR(TODAY()),1,1))";
+      case "daily":
+        return "1"; // unused — projection isn't shown on the daily tab
     }
   }
 

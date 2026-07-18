@@ -142,6 +142,32 @@ function daysInMonth(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 }
 
+/**
+ * How far through the current period we are, in [0, 1] — used to project a
+ * run-rate spend for the whole period ("at this pace you'll spend $X"). Daily is
+ * treated as fully elapsed (a projection within one day isn't meaningful).
+ */
+export function elapsedFraction(cadence: Cadence, now: Date): number {
+  switch (cadence) {
+    case "daily":
+      return 1;
+    case "weekly": {
+      const mondayZero = (now.getDay() + 6) % 7; // Mon=0 … Sun=6
+      return (mondayZero + 1) / 7;
+    }
+    case "monthly":
+      return now.getDate() / daysInMonth(now);
+    case "yearly": {
+      const start = new Date(now.getFullYear(), 0, 1);
+      const dayOfYear = Math.floor((now.getTime() - start.getTime()) / 86_400_000) + 1;
+      const leap =
+        (now.getFullYear() % 4 === 0 && now.getFullYear() % 100 !== 0) ||
+        now.getFullYear() % 400 === 0;
+      return dayOfYear / (leap ? 366 : 365);
+    }
+  }
+}
+
 // --- Formatting helpers (for the fact strings only) ------------------------
 
 function money(n: number): string {
@@ -249,6 +275,19 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
       value: leftToSpend,
       tone: leftToSpend < 0 ? "bad" : "good",
       live: "leftToSpend",
+    });
+  }
+  // Pace / projection: at the current run-rate, what will the whole period total?
+  // Flags overspend early (before "Left to spend" actually goes negative). Not on
+  // daily — projecting within a single day isn't meaningful.
+  if (hasBudgets && cadence !== "daily") {
+    const elapsed = elapsedFraction(cadence, now);
+    const projected = round2(elapsed > 0 ? spentTotal / elapsed : spentTotal);
+    overview.push({
+      label: `Projected ${CADENCE_TITLE[cadence].toLowerCase()}`,
+      value: projected,
+      tone: projected > totalTarget ? "bad" : "good",
+      live: "projected",
     });
   }
   // On the monthly view, surface how much of the monthly pool is still unassigned
