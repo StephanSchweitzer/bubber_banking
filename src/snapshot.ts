@@ -1,7 +1,8 @@
 import { google, sheets_v4 } from "googleapis";
-import { config, BALANCE_TABS } from "./config";
+import { config, BALANCE_HISTORY_TAB } from "./config";
 import { readTokens } from "./tokens";
 import {
+  AccountSnapshot,
   fetchSnapshot,
   buildColumns,
   buildRow,
@@ -10,12 +11,14 @@ import {
 import { SnapshotSheet } from "./snapshot-sheet";
 
 /**
- * Balance snapshot run. Pulls current credit limits, payments due, and cash from
- * Plaid and records one row per period into the Daily / Weekly / Monthly / Yearly
- * tabs. Additive: it never touches the Transactions or Budget tabs.
+ * Balance history snapshot. Pulls current credit limits, payments due, and cash
+ * from Plaid and records one row per day into the hidden Balance History tab, so
+ * the net-worth / owed / limit trend is preserved over time. (The Daily / Weekly
+ * / Monthly / Yearly tabs now show current-period budgeting — see `periods.ts`.)
  *
- * Runnable standalone (`npm run snapshot`) and also invoked at the end of
- * `npm run sync` so a single cron entry keeps both transactions and balances fresh.
+ * Additive and lossless: it never touches the Transactions, Budget, or period
+ * tabs. Runnable standalone (`npm run snapshot`) and also invoked by `npm run
+ * sync`, which passes in already-fetched balances so Plaid is hit only once.
  */
 
 async function sheetsApi(): Promise<sheets_v4.Sheets> {
@@ -26,42 +29,33 @@ async function sheetsApi(): Promise<sheets_v4.Sheets> {
   return google.sheets({ version: "v4", auth: (await auth.getClient()) as any });
 }
 
-/** Ensure the four balance tabs exist; return their titles mapped to numeric gids. */
-async function ensureBalanceTabs(
-  api: sheets_v4.Sheets
-): Promise<Map<string, number>> {
-  const wanted = Object.values(BALANCE_TABS);
-  const meta = await api.spreadsheets.get({
-    spreadsheetId: config.google.sheetId,
-  });
-  const byTitle = new Map<string, number>();
+/** Ensure the hidden Balance History tab exists; return its numeric gid. */
+async function ensureHistoryTab(api: sheets_v4.Sheets): Promise<number> {
+  const meta = await api.spreadsheets.get({ spreadsheetId: config.google.sheetId });
   for (const s of meta.data.sheets ?? []) {
-    const title = s.properties?.title;
-    const id = s.properties?.sheetId;
-    if (title != null && id != null) byTitle.set(title, id);
-  }
-
-  const missing = wanted.filter((t) => !byTitle.has(t));
-  if (missing.length > 0) {
-    const res = await api.spreadsheets.batchUpdate({
-      spreadsheetId: config.google.sheetId,
-      requestBody: {
-        requests: missing.map((title) => ({ addSheet: { properties: { title } } })),
-      },
-    });
-    for (const reply of res.data.replies ?? []) {
-      const p = reply.addSheet?.properties;
-      if (p?.title != null && p.sheetId != null) byTitle.set(p.title, p.sheetId);
+    if (s.properties?.title === BALANCE_HISTORY_TAB && s.properties.sheetId != null) {
+      return s.properties.sheetId;
     }
   }
-
-  const result = new Map<string, number>();
-  for (const t of wanted) result.set(t, byTitle.get(t)!);
-  return result;
+  // Create it hidden — it's an archive, not a day-to-day view.
+  const res = await api.spreadsheets.batchUpdate({
+    spreadsheetId: config.google.sheetId,
+    requestBody: {
+      requests: [
+        { addSheet: { properties: { title: BALANCE_HISTORY_TAB, hidden: true } } },
+      ],
+    },
+  });
+  const id = res.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  if (id == null) throw new Error("Failed to create the Balance History tab.");
+  return id;
 }
 
-/** Fetch balances and write a row into all four cadence tabs. Best-effort per run. */
-export async function runSnapshot(): Promise<void> {
+/**
+ * Fetch balances (unless provided) and record one daily row into Balance History.
+ * Best-effort per run.
+ */
+export async function runSnapshot(accounts?: AccountSnapshot[]): Promise<void> {
   const tokens = await readTokens();
   if (tokens.length === 0) {
     console.log("Snapshot: no linked institutions — skipping.");
@@ -69,36 +63,25 @@ export async function runSnapshot(): Promise<void> {
   }
 
   const now = new Date();
-  const accounts = await fetchSnapshot(tokens);
-  if (accounts.length === 0) {
+  const resolved = accounts ?? (await fetchSnapshot(tokens));
+  if (resolved.length === 0) {
     console.log("Snapshot: no credit/deposit accounts found — skipping.");
     return;
   }
 
-  const columns = buildColumns(accounts);
-  const keys = periodKeys(now);
+  const columns = buildColumns(resolved);
+  const dailyKey = periodKeys(now).daily; // one archived row per day
   const takenAt = now.toISOString().replace("T", " ").slice(0, 16); // "YYYY-MM-DD HH:MM"
 
   const api = await sheetsApi();
-  const tabIds = await ensureBalanceTabs(api);
-  const sheet = new SnapshotSheet(api, tabIds);
+  const historyId = await ensureHistoryTab(api);
+  const sheet = new SnapshotSheet(api, new Map([[BALANCE_HISTORY_TAB, historyId]]));
+  await sheet.upsert(BALANCE_HISTORY_TAB, columns, buildRow(resolved, dailyKey, takenAt));
 
-  const cadences: [keyof typeof keys, string][] = [
-    ["daily", BALANCE_TABS.daily],
-    ["weekly", BALANCE_TABS.weekly],
-    ["monthly", BALANCE_TABS.monthly],
-    ["yearly", BALANCE_TABS.yearly],
-  ];
-  for (const [cadence, tab] of cadences) {
-    const row = buildRow(accounts, keys[cadence], takenAt);
-    await sheet.upsert(tab, columns, row);
-  }
-
-  const credit = accounts.filter((a) => a.kind === "credit").length;
-  const bank = accounts.filter((a) => a.kind === "bank").length;
+  const credit = resolved.filter((a) => a.kind === "credit").length;
+  const bank = resolved.filter((a) => a.kind === "bank").length;
   console.log(
-    `Snapshot recorded: ${credit} credit card(s), ${bank} bank account(s) ` +
-      `→ Daily/Weekly/Monthly/Yearly.`
+    `Snapshot recorded: ${credit} credit card(s), ${bank} bank account(s) → Balance History.`
   );
 }
 

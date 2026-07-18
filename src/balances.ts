@@ -192,20 +192,39 @@ function round2(n: number): number {
 
 // --- Period keys -----------------------------------------------------------
 
-/** Period keys for the four cadences, derived from one moment. */
-export function periodKeys(now: Date): Record<
-  "daily" | "weekly" | "monthly" | "yearly",
-  string
-> {
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const [isoYear, isoWeek] = isoWeekOf(now);
+export type Cadence = "daily" | "weekly" | "monthly" | "yearly";
+
+/**
+ * The period key a given moment belongs to, for one cadence. Two dates share a
+ * key iff they fall in the same day / ISO week (Mon-start) / month / year — so
+ * comparing keys is how the period views decide whether a transaction is "in"
+ * the current window.
+ */
+export function periodKeyOf(date: Date, cadence: Cadence): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  switch (cadence) {
+    case "daily":
+      return `${y}-${m}-${d}`;
+    case "weekly": {
+      const [isoYear, isoWeek] = isoWeekOf(date);
+      return `${isoYear}-W${String(isoWeek).padStart(2, "0")}`;
+    }
+    case "monthly":
+      return `${y}-${m}`;
+    case "yearly":
+      return `${y}`;
+  }
+}
+
+/** Period keys for all four cadences, derived from one moment. */
+export function periodKeys(now: Date): Record<Cadence, string> {
   return {
-    daily: `${y}-${m}-${d}`,
-    weekly: `${isoYear}-W${String(isoWeek).padStart(2, "0")}`,
-    monthly: `${y}-${m}`,
-    yearly: `${y}`,
+    daily: periodKeyOf(now, "daily"),
+    weekly: periodKeyOf(now, "weekly"),
+    monthly: periodKeyOf(now, "monthly"),
+    yearly: periodKeyOf(now, "yearly"),
   };
 }
 

@@ -3,6 +3,9 @@ import { plaidClient } from "./plaid";
 import { readTokens, updateCursor, ItemToken } from "./tokens";
 import { TransactionsSheet, SheetRow } from "./sheets";
 import { runSnapshot } from "./snapshot";
+import { renderPeriods } from "./periods";
+import { fetchSnapshot } from "./balances";
+import { humanizeCategory } from "./period-view";
 
 /**
  * Mode 2 — headless sync. For every linked item, pull incremental changes from
@@ -17,7 +20,7 @@ function toRow(
   accountNames: Map<string, string>,
   institution: string
 ): SheetRow {
-  const category =
+  const rawCategory =
     txn.personal_finance_category?.primary ??
     (txn.category ? txn.category.join(" > ") : "");
   return [
@@ -25,8 +28,11 @@ function toRow(
     txn.date,
     txn.name ?? "",
     txn.merchant_name ?? "",
-    txn.amount,
-    category,
+    // Plaid amounts are positive for outflows. Store display-signed instead —
+    // money out negative, money in positive — so the sheet reads intuitively and
+    // the period views can sum spend vs. income by sign.
+    -txn.amount,
+    humanizeCategory(rawCategory),
     accountNames.get(txn.account_id) ?? txn.account_id,
     institution,
   ];
@@ -125,13 +131,30 @@ async function main(): Promise<void> {
       : `Transaction sync complete with ${failures} item failure(s).`
   );
 
-  // Record a balance snapshot too, so one cron entry keeps everything fresh.
-  // Best-effort: a snapshot failure must not fail the transaction sync.
+  // Refresh the derived views too, so one cron entry keeps everything fresh.
+  // Balances are fetched once here and shared, so Plaid is hit only once. Each
+  // step is best-effort: a rendering failure must not fail the transaction sync.
   try {
-    await runSnapshot();
+    const accounts = await fetchSnapshot(tokens);
+    try {
+      await runSnapshot(accounts); // archive balances into Balance History
+    } catch (err: unknown) {
+      console.error(
+        "Balance snapshot failed (transactions were still synced):",
+        (err as any)?.response?.data ?? (err as Error)?.message ?? err
+      );
+    }
+    try {
+      await renderPeriods(accounts); // re-render Daily/Weekly/Monthly/Yearly
+    } catch (err: unknown) {
+      console.error(
+        "Period views failed (transactions were still synced):",
+        (err as any)?.response?.data ?? (err as Error)?.message ?? err
+      );
+    }
   } catch (err: unknown) {
     console.error(
-      "Balance snapshot failed (transactions were still synced):",
+      "Balance fetch failed (transactions were still synced):",
       (err as any)?.response?.data ?? (err as Error)?.message ?? err
     );
   }

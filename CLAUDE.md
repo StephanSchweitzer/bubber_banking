@@ -8,11 +8,12 @@ Guidance for Claude Code (and humans) working in this repo.
 real Google Sheet.** The linked institutions are production Plaid items (credit
 cards and bank accounts). Treat every run as production:
 
-- `npm run sync` and `npm run snapshot` hit **production Plaid** and **write to the
-  owner's real spreadsheet**. Do not run them casually to "see if it works" — a run
-  mutates real data and consumes real Plaid API calls.
+- `npm run sync`, `npm run snapshot`, and `npm run periods` hit **production Plaid**
+  and **write to the owner's real spreadsheet**. Do not run them casually to "see if
+  it works" — a run mutates real data and consumes real Plaid API calls.
 - Prefer verifying logic without side effects: `npm run typecheck`, or exercise the
-  pure functions in `src/balances.ts` (`buildColumns`, `buildRow`, `periodKeys`)
+  pure functions in `src/balances.ts` (`buildColumns`, `buildRow`, `periodKeys`) and
+  `src/period-view.ts` (`buildPeriodView`, `humanizeCategory`, `prorationFactor`)
   with mock data.
 - If you must run a live command, say so first and get the owner's go-ahead.
 - **Never** print, commit, or paste the contents of `tokens.json`, `.env`, or the
@@ -24,16 +25,24 @@ cards and bank accounts). Treat every run as production:
 Pulls data from **Plaid** and syncs it into a **Google Sheet**. Polling only, no
 webhooks — nothing needs to be publicly exposed.
 
-Three entry points (all in `src/`, run via `tsx`):
+Four entry points (all in `src/`, run via `tsx`):
 
 - **`npm run link`** (`link.ts`) — interactive, local, once per bank. Serves a page
   that runs Plaid Link, exchanges the public token, and appends the item to
   `tokens.json`. Requests the `Transactions` + `Liabilities` products.
 - **`npm run sync`** (`sync.ts`) — headless, cron-friendly. Incrementally pulls
-  `/transactions/sync` per item into the **Transactions** tab, then runs a balance
-  snapshot at the end (best-effort — a snapshot failure won't fail the sync).
-- **`npm run snapshot`** (`snapshot.ts`) — headless. Records credit limits, amounts
-  owed, payments due, and cash into the **Daily / Weekly / Monthly / Yearly** tabs.
+  `/transactions/sync` per item into the **Transactions** tab, then (best-effort,
+  sharing one balance fetch) archives balances into **Balance History** and
+  re-renders the period tabs. A rendering failure won't fail the transaction sync.
+- **`npm run snapshot`** (`snapshot.ts`) — headless. Archives credit limits, amounts
+  owed, payments due, and cash as one daily row in the hidden **Balance History** tab.
+- **`npm run periods`** (`periods.ts`) — headless. Renders the current-period
+  budgeting dashboards into the **Daily / Weekly / Monthly / Yearly** tabs.
+
+Maintenance helper: **`npm run reset-cursor`** (`reset-cursor.ts`) clears every
+item's sync cursor (local `tokens.json` only) so the next `npm run sync` re-pulls
+full history and rewrites existing rows in place — used to normalize older rows to
+the current shape (display-signed amounts, humanized categories).
 
 ## Architecture
 
@@ -43,32 +52,63 @@ Three entry points (all in `src/`, run via `tsx`):
 | `plaid.ts` | The single shared `PlaidApi` client. |
 | `tokens.ts` | Read/write `tokens.json` (linked items + per-item sync cursor). Atomic writes. |
 | `link.ts` | Mode 1: Plaid Link bootstrap server. |
-| `sync.ts` | Mode 2: transaction sync orchestration, then `runSnapshot()`. |
-| `sheets.ts` | `TransactionsSheet` — owns the **Transactions** tab (keyed upsert on `transaction_id`). |
-| `balances.ts` | Fetches balances/liabilities from Plaid; shapes columns/rows/period keys. Pure, testable. |
-| `snapshot-sheet.ts` | `SnapshotSheet` — generic period-keyed grid writer + color formatting for the balance tabs. |
-| `snapshot.ts` | Balance-snapshot entry point; exports `runSnapshot()`. |
+| `sync.ts` | Mode 2: transaction sync, then shares one balance fetch with `runSnapshot()` + `renderPeriods()`. |
+| `sheets.ts` | `TransactionsSheet` — owns the **Transactions** tab (keyed upsert on `transaction_id`; hides machinery cols, humanized categories, display-signed amounts). |
+| `balances.ts` | Fetches balances/liabilities from Plaid; shapes columns/rows/period keys (`periodKeyOf`, `periodKeys`). Pure, testable. |
+| `snapshot-sheet.ts` | `SnapshotSheet` — generic period-keyed grid writer + color formatting (used by Balance History). |
+| `snapshot.ts` | Balance-history entry point; exports `runSnapshot()` → hidden **Balance History** tab. |
+| `period-view.ts` | Pure shaping for the period tabs: `buildPeriodView` (overview / budget-by-category / per-account sections), `humanizeCategory`, `prorationFactor`, spend classification. |
+| `period-sheet.ts` | `PeriodSheet` — renders a `PeriodView` into a tab (merged bands, budget bars, sign-aware currency). Clear+rewrite each run. |
+| `budget.ts` | Reads the human **Budget** tab (category → monthly target) and append-only seeds newly-seen categories. Never overwrites human cells. |
+| `periods.ts` | Mode 4: reads the ledger + budget + balances and renders the four period tabs. Exports `renderPeriods()`. |
 
 ## Invariants — keep these true
 
-- **The writer only touches its own tabs**: `Transactions` and the four balance tabs
-  (`Daily`/`Weekly`/`Monthly`/`Yearly`). A human-edited **Budget** tab in the same
-  spreadsheet must never be read or modified.
+- **The writer only touches its own tabs**: `Transactions`, the four period tabs
+  (`Daily`/`Weekly`/`Monthly`/`Yearly`), and the hidden `Balance History` tab. The
+  **Budget** tab is human-owned: the sync may **read** its targets and **append**
+  newly-discovered categories with a blank target, but must **never overwrite** a
+  cell a human has filled in.
 - **Idempotent / re-runnable**: transactions upsert keyed on `transaction_id`;
-  balance rows upsert keyed on the period key (day / ISO week / month / year), so
-  re-running within a period overwrites rather than duplicates.
+  Balance History rows upsert keyed on the day; the period tabs are fully
+  cleared and re-rendered each run. Re-running never duplicates.
 - **Sync cursors** are persisted per item only after a successful drain, so a
   mid-run failure reprocesses safely on the next run.
 - **One item failing is logged and skipped**; the rest of the run still completes.
   `npm run sync` exits non-zero if any item failed so cron/monitoring can alert.
-- Balance snapshots are **lossless**: historical rows and columns for accounts that
+- Balance History is **lossless**: historical rows and columns for accounts that
   later disappear are preserved, not dropped.
+- **Transactions is the source of truth.** The period tabs are derived *views*
+  filtered from it — nothing is ever lost when a period "resets"; the window just
+  moves. Views re-render each `sync`/`periods` run (not live at midnight), so a
+  period rolls over on the first run after the boundary.
 
-## Balance snapshot layout
+## Period-tab layout
+
+Each period tab shows the **current** period for its cadence (today / this ISO week,
+Mon-start / this month / this year), stacked in a fixed 5-column grid
+(`Date` / `Name` / `Merchant` / `Amount` / `Category`):
+
+1. **Title band** + reset hint / last-updated subtitle.
+2. **Overview** strip: `Cash on hand`, `Total owed`, `Available credit`,
+   `Spent this <period>`, and (when budgets exist) `Left to spend`.
+3. **Budget by category**: `Category` / `Budget` / `Spent` / `Left` / bar. Targets
+   are **monthly**, prorated per cadence (daily = ÷ days-in-month, weekly = ×12/52,
+   monthly = ×1, yearly = ×12). `Left` goes red when overspent.
+4. **One section per account** — a coloured band (credit = blue, bank = green) with
+   the account's facts stated once (`Owed / Limit / Due / Min`, or `Balance`), then
+   that period's transactions.
+
+**Sign convention:** the ledger stores display-signed amounts — money out negative,
+money in positive. "Spent" sums outflow magnitudes and **excludes** transfers and
+loan/credit-card payments (they'd double-count real spend) but still lists them per
+account. Categories are humanized at write time (`FOOD_AND_DRINK` → `Food and drink`).
+
+## Balance History layout (hidden tab)
 
 Per credit card (blue): `Owed`, `Limit`, `Due Date`, `Min Pmt`. Then bold credit
 totals (dark blue): `Total Owed`, `Total Limit`, `Available`, `Total Min Pmt`. Then
-each deposit account's `Balance` (green) and a bold `Cash Total`.
+each deposit account's `Balance` (green) and a bold `Cash Total`. One row per day.
 
 **Known limitation:** `Due Date` and `Min Pmt` come from `/liabilities/get`, which
 needs the **Liabilities** product *and* cardholder consent on the item. Items linked

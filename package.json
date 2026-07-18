@@ -8,6 +8,8 @@
     "link": "tsx src/link.ts",
     "sync": "tsx src/sync.ts",
     "snapshot": "tsx src/snapshot.ts",
+    "periods": "tsx src/periods.ts",
+    "reset-cursor": "tsx src/reset-cursor.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

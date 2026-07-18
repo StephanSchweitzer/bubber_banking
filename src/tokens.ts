@@ -63,3 +63,22 @@ export async function updateCursor(
   item.cursor = cursor;
   await writeTokens(tokens);
 }
+
+/**
+ * Clear every item's sync cursor (back to null) so the next `npm run sync`
+ * re-pulls the full available history from Plaid. Because the Transactions tab
+ * upserts on `transaction_id`, that re-pull rewrites existing rows in place
+ * (no duplicates) — the intended way to normalize older rows to the current
+ * shape (display-signed amounts, humanized categories). Local file write only;
+ * the actual re-pull happens on the next sync. Returns the number reset.
+ */
+export async function resetCursors(): Promise<number> {
+  const tokens = await readTokens();
+  let reset = 0;
+  for (const t of tokens) {
+    if (t.cursor !== null) reset++;
+    t.cursor = null;
+  }
+  await writeTokens(tokens);
+  return reset;
+}

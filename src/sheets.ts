@@ -47,6 +47,72 @@ export class TransactionsSheet {
 
     this.sheetId = await this.ensureTab();
     await this.loadIndex();
+    await this.formatTab();
+  }
+
+  /**
+   * Keep the tab readable for a non-technical viewer: hide the three machinery
+   * columns (transaction_id / account / institution — still written and used
+   * under the hood), freeze + bold the header, and show amounts with sign-aware
+   * colours (money in green, money out red). Idempotent; safe to run every init.
+   */
+  private async formatTab(): Promise<void> {
+    const hide = (col: number) => ({
+      updateDimensionProperties: {
+        range: {
+          sheetId: this.sheetId,
+          dimension: "COLUMNS",
+          startIndex: col,
+          endIndex: col + 1,
+        },
+        properties: { hiddenByUser: true },
+        fields: "hiddenByUser",
+      },
+    });
+
+    await this.api.spreadsheets.batchUpdate({
+      spreadsheetId: config.google.sheetId,
+      requestBody: {
+        requests: [
+          hide(0), // transaction_id
+          hide(6), // account
+          hide(7), // institution
+          {
+            updateSheetProperties: {
+              properties: { sheetId: this.sheetId, gridProperties: { frozenRowCount: 1 } },
+              fields: "gridProperties(frozenRowCount)",
+            },
+          },
+          {
+            repeatCell: {
+              range: { sheetId: this.sheetId, startRowIndex: 0, endRowIndex: 1 },
+              cell: { userEnteredFormat: { textFormat: { bold: true } } },
+              fields: "userEnteredFormat(textFormat)",
+            },
+          },
+          {
+            // Amount column (E, index 4), from row 2 down: signed currency colours.
+            repeatCell: {
+              range: {
+                sheetId: this.sheetId,
+                startRowIndex: 1,
+                startColumnIndex: 4,
+                endColumnIndex: 5,
+              },
+              cell: {
+                userEnteredFormat: {
+                  numberFormat: {
+                    type: "NUMBER",
+                    pattern: '[Green]"$"#,##0.00;[Red]-"$"#,##0.00',
+                  },
+                },
+              },
+              fields: "userEnteredFormat(numberFormat)",
+            },
+          },
+        ],
+      },
+    });
   }
 
   /**
