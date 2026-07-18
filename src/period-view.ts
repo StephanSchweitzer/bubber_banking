@@ -89,6 +89,11 @@ export interface PeriodView {
   subtitle: string; // reset hint + last-updated
   overview: OverviewStat[];
   budget: BudgetLine[];
+  /**
+   * Budgeted category names for the year-to-date rollover table (monthly tab only;
+   * empty on other cadences). The per-category "banked" figure is a live formula.
+   */
+  rollover: string[];
   sections: AccountSection[];
   /** True if any budget target is set — drives whether budget columns show. */
   hasBudgets: boolean;
@@ -328,6 +333,12 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
     txnsByLabel.get(label)!.push(t);
   }
 
+  // --- Rollover (monthly only) --------------------------------------------
+  // Budgeted categories carry a year-to-date "banked" figure (see period-sheet):
+  // target × months-elapsed − spent-YTD. Positive = surplus banked, negative = hole.
+  const rollover: string[] =
+    cadence === "monthly" ? budget.filter((b) => b.target != null).map((b) => b.category) : [];
+
   const sections: AccountSection[] = [];
   const usedLabels = new Set<string>();
   // Credit cards first, then bank accounts — matching the snapshot ordering.
@@ -358,6 +369,7 @@ export function buildPeriodView(input: BuildPeriodViewInput): PeriodView {
     subtitle: `${CADENCE_RESET[cadence]} · updated ${takenAt}`,
     overview,
     budget,
+    rollover,
     sections,
     hasBudgets,
   };

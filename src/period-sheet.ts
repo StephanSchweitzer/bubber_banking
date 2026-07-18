@@ -194,6 +194,10 @@ class GridBuilder {
     this.overview(view.overview);
     this.spacer();
     if (view.budget.length > 0) this.budgetBlock(view.budget);
+    if (view.rollover.length > 0) {
+      this.spacer();
+      this.rolloverBlock(view.rollover);
+    }
     for (const sec of view.sections) {
       this.spacer();
       this.section(sec);
@@ -444,6 +448,50 @@ class GridBuilder {
         },
       },
     };
+  }
+
+  /**
+   * Rollover table (monthly tab only): each budgeted category's year-to-date
+   * "banked" figure = target × months-elapsed − spent-YTD. Positive means unspent
+   * budget has accumulated; negative (red) means you've overspent for the year.
+   * Approximates YNAB rollover under the assumption that the *current* monthly
+   * target held for every month so far (we don't snapshot historical targets).
+   */
+  private rolloverBlock(categories: string[]): void {
+    this.sectionLabel("Rollover — budget banked this year");
+    const head = this.push(["Category", "Banked YTD", "", "", ""]);
+    this.rowFormat(head, {
+      backgroundColor: C.headBg,
+      horizontalAlignment: "RIGHT",
+      textFormat: { foregroundColor: C.headText, fontSize: 9 },
+    });
+    this.cellAlign(head, 0, "LEFT");
+
+    for (const category of categories) {
+      const row = this.push([category, "", "", "", ""]);
+      const r = row + 1;
+      // SUMIFS over this year's (negative) outflow is already −spentYTD, so ADD it.
+      const bankedF =
+        `=IFERROR(VLOOKUP($A${r},Budget!$A$5:$B,2,FALSE)*MONTH(TODAY())` +
+        `+SUMIFS(Transactions!$E:$E,Transactions!$F:$F,$A${r},Transactions!$E:$E,"<0",` +
+        `Transactions!$B:$B,TEXT(TODAY(),"yyyy")&"*"),"")`;
+      this.formulaCells.push({ row, col: 1, formula: bankedF });
+      this.cellNumber(row, 1, CURRENCY_NEG_RED);
+      this.cellAlign(row, 0, "LEFT");
+    }
+
+    const note = this.push([
+      "Unspent budget from earlier months this year is banked; overspending eats into it. Assumes your current targets held all year.",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    this.merge(note, 0, COLS);
+    this.rowFormat(note, {
+      horizontalAlignment: "LEFT",
+      textFormat: { italic: true, fontSize: 9, foregroundColor: C.muted },
+    });
   }
 
   private section(sec: PeriodView["sections"][number]): void {
