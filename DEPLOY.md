@@ -40,6 +40,19 @@ node --version          # need 18+; install via nodesource if missing
 mkdir -p ~/apps/bubber-banking ~/staging/bubber-banking ~/.locks ~/logs
 ```
 
+Set the droplet to **your** timezone, not the datacentre's — the service derives
+"today" and every period boundary from host local time, so a mismatch silently shows
+the wrong day (as root, since `deploy` has no sudo):
+
+```bash
+timedatectl set-timezone America/Los_Angeles   # your zone
+systemctl restart cron                         # cron caches the zone at startup
+```
+
+Match it in the sheet too — **File → Settings → Time zone**. The live formulas key
+off `TODAY()`, which resolves in the spreadsheet's zone, so if the two disagree the
+formula cells and the rendered sections will report different periods.
+
 Then put the three secret files in `~/apps/bubber-banking/` — they live only here
 and the deploy is written to never overwrite or delete them:
 

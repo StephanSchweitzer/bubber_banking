@@ -87,6 +87,14 @@ the current shape (display-signed amounts, humanized categories).
   filtered from it — nothing is ever lost when a period "resets"; the window just
   moves. Views re-render each `sync`/`periods` run (not live at midnight), so a
   period rolls over on the first run after the boundary.
+- **Period boundaries are the host's local time.** `periodKeyOf` (`balances.ts`) and
+  every "current period" derivation in `period-view.ts` (week start, proration, days
+  left) use local-time getters — `getFullYear`/`getMonth`/`getDate`/`getDay`, never
+  UTC. So the **server's timezone must match the owner's**, or the Daily tab shows
+  the wrong day and month/year roll over early. The **sheet's own timezone must match
+  too**: the live formulas key off `TODAY()`, which resolves in the *spreadsheet's*
+  zone, so a mismatch makes the formula cells and the rendered sections disagree
+  about which period it is. Both are set once at deploy time (see `DEPLOY.md`).
 
 ## Period-tab layout
 
