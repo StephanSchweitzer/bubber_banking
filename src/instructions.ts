@@ -18,12 +18,16 @@ const MANUAL: Line[] = [
   { text: "1. In the “Monthly budget” cell at the top, type how much money you have to budget each month.", kind: "body" },
   { text: "2. Next to each category, type how much of that you want to spend there. That's it — save nothing, it's automatic.", kind: "body" },
   { text: "• “Allocated” = how much you've assigned so far. “Unallocated” = how much you still have left to assign.", kind: "body" },
-  { text: "• “Spent (this month)” and “Left” update on their own as money is spent. Red means you've gone over.", kind: "body" },
+  { text: "• “Spent (this month)” and “Left” update on their own as money is spent. Orange means you've gone a little over; red means over by 30% or more.", kind: "body" },
+  { text: "• “Suggested” shows each category's average spend over the last 3 months — a starting point. Not sure what to budget? Copy that number into the Budget column.", kind: "body" },
   { text: "Your numbers stay put — they are never erased. You only retype if you want to change them.", kind: "tip" },
 
   { text: "Seeing your spending (Daily / Weekly / Monthly / Yearly tabs)", kind: "h2" },
   { text: "Each tab shows the transactions for that period only: today, this week (from Monday), this month, this year.", kind: "body" },
-  { text: "The top shows an overview, then your budget vs spending, then each card/account with its transactions.", kind: "body" },
+  { text: "The top shows an overview, then your budget vs spending (which updates live the moment you edit a budget on the Budget tab), then the biggest purchases and each card/account with its transactions.", kind: "body" },
+  { text: "• The Daily tab shows “Safe to spend today” — what's left of your monthly budget, split over the days remaining in the month.", kind: "body" },
+  { text: "• Weekly/Monthly/Yearly show a “Projected” total — where your spending is headed at the current pace, so you can catch overspending early.", kind: "body" },
+  { text: "• The Monthly tab's “Rollover” shows budget banked this year: unspent budget from earlier months adds up (green), overspending eats into it (red).", kind: "body" },
   { text: "These tabs refresh by themselves. Don't type in them — anything typed here gets overwritten on the next update.", kind: "tip" },
 
   { text: "The Transactions tab", kind: "h2" },

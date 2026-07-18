@@ -72,8 +72,8 @@ the current shape (display-signed amounts, humanized categories).
   (`Daily`/`Weekly`/`Monthly`/`Yearly`), the hidden `Balance History` tab, and the
   `Instructions` tab. On the **Budget** tab, columns A+B are human-owned (the sync
   may **read** targets and **append** new categories with a blank target, but must
-  **never overwrite** B1 or a human-entered target); columns C+D are code-owned
-  live formulas (Spent/Left), safe to rewrite each run.
+  **never overwrite** B1 or a human-entered target); columns C+D+E are code-owned
+  live formulas (Spent/Left/Suggested), safe to rewrite each run.
 - **Idempotent / re-runnable**: transactions upsert keyed on `transaction_id`;
   Balance History rows upsert keyed on the day; the period tabs are fully
   cleared and re-rendered each run. Re-running never duplicates.
@@ -96,13 +96,32 @@ Mon-start / this month / this year), stacked in a fixed 5-column grid
 
 1. **Title band** + reset hint / last-updated subtitle.
 2. **Overview** strip: `Cash on hand`, `Total owed`, `Available credit`,
-   `Spent this <period>`, and (when budgets exist) `Left to spend`. The monthly
-   tab also shows `Unallocated` (pool minus category allocations). The strip wraps
-   to a second label/value row past five stats.
-3. **Budget by category**: `Category` / `Budget` / `Spent` / `Left` / bar. Targets
-   are **monthly**, prorated per cadence (daily = ÷ days-in-month, weekly = ×12/52,
-   monthly = ×1, yearly = ×12). `Left` goes red when overspent.
-4. **One section per account** — a coloured band (credit = blue, bank = green) with
+   `Spent this <period>`, and (when budgets exist) `Left to spend`. Weekly/monthly/
+   yearly also show `Projected <period>` (run-rate = spent ÷ elapsed-fraction, bad
+   tone if it exceeds total budget); the daily tab shows `Safe to spend today`
+   (remaining monthly budget ÷ days left, referencing `Monthly!D6` for month spend);
+   the monthly tab shows `Unallocated` (`=Budget!B3`). The strip wraps to a second
+   label/value row past five stats.
+3. **Budget by category**: `Category` / `Budget` / `Spent` / `Left` / bar. These
+   four value cells are **live formulas**, not baked-in numbers, so they track
+   Budget-tab edits and new transactions the instant they change — no sync needed.
+   `Budget` is a `VLOOKUP` into `Budget!A5:B` (the human target) prorated per cadence
+   (daily = ÷ days-in-month via `EOMONTH`, weekly = ×12/52, monthly = ×1, yearly =
+   ×12); `Spent` is a period-scoped `SUMIFS` over the ledger (the current period is
+   expressed purely in the formula — a `TODAY()` wildcard for day/month/year, a
+   `WEEKDAY`-derived Mon–Sun text range for the week); `Left` = `Budget − Spent`; the
+   bar is a `REPT` block glyph. Overspend colour comes from two live **conditional-
+   format** rules on `Left`+bar: **orange** when over target, **red** when over by
+   ≥30% (`OVER_RED_THRESHOLD`). The render clears prior conditional rules first so
+   they don't accumulate. The overview `Spent this <period>` / `Left to spend` /
+   `Unallocated` stats are likewise live (they reference the block / `Budget!B3`).
+4. **Rollover** (monthly tab only): per budgeted category, `Banked YTD` =
+   `target × MONTH(TODAY()) − spent-YTD` (red when negative). A YNAB-style carryover
+   approximation — it assumes the *current* target held all year (we don't snapshot
+   historical targets).
+5. **Biggest this <period>**: the top ~5 outflows (static, data-driven) — a "where
+   did it go?" strip.
+6. **One section per account** — a coloured band (credit = blue, bank = green) with
    the account's facts stated once (`Owed / Limit / Due / Min`, or `Balance`), then
    that period's transactions.
 
@@ -129,16 +148,18 @@ come from `/accounts/balance/get` and always populate. Code degrades gracefully.
 A1 Monthly budget | B1  <- you type your monthly pool
 A2 Allocated      | B2  =SUM(B5:B)   (live)
 A3 Unallocated    | B3  =B1-B2       (live)
-A4 Category | B4 Budget | C4 Spent (this month) | D4 Left   (table header)
-A5 <category> | B5 <target> | C5 =SUMIFS(...) | D5 =B5-C5
+A4 Category | B4 Budget | C4 Spent (this month) | D4 Left | E4 Suggested (3-mo avg)
+A5 <category> | B5 <target> | C5 =SUMIFS(...) | D5 =B5-C5 | E5 =avg last 3 months
 ...
 ```
 
-B2/B3 and C/D are **live formulas** — allocated, unallocated, spent, and left all
-update the instant a number changes, no sync needed. C (Spent) is a month-to-date
-`SUMIFS` over the ledger keyed on category + a `TEXT(TODAY(),"yyyy-mm")&"*"`
-wildcard (ledger dates are ISO text, so no date-serial math). The sync READS B1 +
-targets (A5:B), APPENDS newly-seen categories (blank target), and rewrites C/D via
+B2/B3 and C/D/E are **live formulas** — allocated, unallocated, spent, left, and the
+suggested target all update the instant a number changes, no sync needed. C (Spent)
+is a month-to-date `SUMIFS` over the ledger keyed on category + a
+`TEXT(TODAY(),"yyyy-mm")&"*"` wildcard (ledger dates are ISO text, so no date-serial
+math). E (Suggested) averages the last three complete months' spend (`EDATE` month
+wildcards) as a non-destructive hint — it never writes B. The sync READS B1 +
+targets (A5:B), APPENDS newly-seen categories (blank target), and rewrites C/D/E via
 `writeBudgetFormulas`; it never writes B1 or a human target. `ensureBudgetTab`
 installs/repairs the block idempotently and migrates an old two-column layout by
 inserting three rows on top. Numeric-looking categories are never seeded (guards a
