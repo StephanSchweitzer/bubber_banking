@@ -14,9 +14,10 @@ import { BudgetTarget } from "./period-view";
  *   ...
  *
  * Column ownership: A + B are HUMAN-owned (category name is auto-seeded, target is
- * typed). C + D are CODE-owned live formulas — Spent is a month-to-date SUMIFS over
- * the Transactions ledger, Left is Budget − Spent. Every figure updates the instant
- * a number changes; C/D need no sync (they recompute from the ledger live).
+ * typed). C + D + E are CODE-owned live formulas — Spent is a month-to-date SUMIFS
+ * over the Transactions ledger, Left is Budget − Spent, and Suggested is the trailing
+ * 3-month average spend (a starting-point hint you can copy into B). Every figure
+ * updates the instant a number changes; C/D/E need no sync (they recompute live).
  *
  * The sync only ever: READS the total (B1) + per-category targets (A5:B), APPENDS
  * newly-discovered categories (blank target), and (re)writes the C/D formulas. It
@@ -30,6 +31,7 @@ const TABLE_CATEGORY = "Category";
 const TABLE_AMOUNT = "Budget";
 const TABLE_SPENT = "Spent (this month)";
 const TABLE_LEFT = "Left";
+const TABLE_SUGGESTED = "Suggested (3-mo avg)";
 
 const DATA_START_ROW = 5; // first category row (1-based)
 const ALLOCATED_FORMULA = "=SUM(B5:B)";
@@ -107,8 +109,8 @@ export async function ensureBudgetTab(
           values: [[ALLOCATED_FORMULA], [UNALLOCATED_FORMULA], [TABLE_AMOUNT]],
         },
         {
-          range: `${BUDGET_TAB}!C4:D4`,
-          values: [[TABLE_SPENT, TABLE_LEFT]],
+          range: `${BUDGET_TAB}!C4:E4`,
+          values: [[TABLE_SPENT, TABLE_LEFT, TABLE_SUGGESTED]],
         },
       ],
     },
@@ -177,14 +179,16 @@ export async function seedCategories(
 }
 
 /**
- * (Re)write the live Spent/Left formulas (columns C/D) for every category row.
- * Spent is a month-to-date SUMIFS over the Transactions ledger for that category
- * (outflows only — amounts are negative for spend, so we negate the sum). Left is
- * Budget − Spent, blank when no target is set. These are code-owned: overwriting
- * them each run is safe because they hold formulas, not human input.
+ * (Re)write the live Spent/Left/Suggested formulas (columns C/D/E) for every
+ * category row. Spent is a month-to-date SUMIFS over the Transactions ledger for
+ * that category (outflows only — amounts are negative for spend, so we negate the
+ * sum). Left is Budget − Spent, blank when no target is set. Suggested is the
+ * average of the last three *complete* months' spend for the category — a
+ * starting-point hint the human can copy into B (it never writes B itself). These
+ * are code-owned: overwriting them each run is safe because they hold formulas.
  *
  * Dates in the ledger are ISO text ("YYYY-MM-DD"), so a `"yyyy-mm"&"*"` wildcard
- * cleanly scopes to the current month without any date-serial math.
+ * cleanly scopes to a given month without any date-serial math.
  */
 export async function writeBudgetFormulas(api: sheets_v4.Sheets): Promise<void> {
   const colA = await api.spreadsheets.values.get({
@@ -197,16 +201,21 @@ export async function writeBudgetFormulas(api: sheets_v4.Sheets): Promise<void> 
 
   const rows: string[][] = [];
   for (let r = DATA_START_ROW; r <= lastRow; r++) {
+    // One prior-month spend term for the Suggested average.
+    const priorMonth = (n: number) =>
+      `-SUMIFS(Transactions!$E:$E,Transactions!$F:$F,$A${r},Transactions!$E:$E,"<0",` +
+      `Transactions!$B:$B,TEXT(EDATE(TODAY(),-${n}),"yyyy-mm")&"*")`;
     rows.push([
       `=IFERROR(-SUMIFS(Transactions!$E:$E,Transactions!$F:$F,$A${r},` +
         `Transactions!$B:$B,TEXT(TODAY(),"yyyy-mm")&"*",Transactions!$E:$E,"<0"),0)`,
       `=IF($B${r}="","",$B${r}-$C${r})`,
+      `=IFERROR(ROUND((${priorMonth(1)}+${priorMonth(2)}+${priorMonth(3)})/3,2),0)`,
     ]);
   }
 
   await api.spreadsheets.values.update({
     spreadsheetId: config.google.sheetId,
-    range: `${BUDGET_TAB}!C${DATA_START_ROW}:D${lastRow}`,
+    range: `${BUDGET_TAB}!C${DATA_START_ROW}:E${lastRow}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
@@ -236,8 +245,8 @@ async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<
       numberFormat: { type: "NUMBER", pattern: CURRENCY_NEG_RED },
       textFormat: { bold: true },
     }),
-    // Row 4 table header band (Category | Budget | Spent | Left).
-    cell(sheetId, 3, 4, 0, 4, {
+    // Row 4 table header band (Category | Budget | Spent | Left | Suggested).
+    cell(sheetId, 3, 4, 0, 5, {
       backgroundColor: slate700,
       textFormat: { bold: true, foregroundColor: white },
       wrapStrategy: "WRAP",
@@ -258,6 +267,19 @@ async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<
         fields: "userEnteredFormat(numberFormat)",
       },
     },
+    // Suggested column (E5:E) plain currency, muted grey so it reads as a hint.
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 4, startColumnIndex: 4, endColumnIndex: 5 },
+        cell: {
+          userEnteredFormat: {
+            numberFormat: { type: "NUMBER", pattern: CURRENCY },
+            textFormat: { foregroundColor: rgb(0x94, 0xa3, 0xb8) }, // slate-400
+          },
+        },
+        fields: "userEnteredFormat(numberFormat,textFormat)",
+      },
+    },
     // Column widths + frozen header.
     {
       updateDimensionProperties: {
@@ -268,7 +290,7 @@ async function formatBudgetTab(api: sheets_v4.Sheets, sheetId: number): Promise<
     },
     {
       updateDimensionProperties: {
-        range: { sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: 4 },
+        range: { sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: 5 },
         properties: { pixelSize: 130 },
         fields: "pixelSize",
       },
