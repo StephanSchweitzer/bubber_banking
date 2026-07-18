@@ -258,13 +258,23 @@ export class TransactionsSheet {
       for (const id of removedIds) this.rowByTxnId.delete(id);
     }
 
-    // 3. Append new rows at the bottom.
+    // 3. Append new rows at the bottom, at an explicit row.
+    //
+    // We deliberately DON'T use `values.append` here: its table auto-detection
+    // mis-starts at column B when column A is hidden (as transaction_id is),
+    // shifting every appended row one column right (amount lands in the category
+    // column, institution falls off). Writing to an explicit `A{nextRow}` range
+    // pins the start at column A regardless of hidden columns.
     if (appends.length > 0) {
-      await this.api.spreadsheets.values.append({
+      const colA = await this.api.spreadsheets.values.get({
         spreadsheetId: config.google.sheetId,
-        range: `${TRANSACTIONS_TAB}!A:H`,
+        range: `${TRANSACTIONS_TAB}!A:A`,
+      });
+      const nextRow = (colA.data.values?.length ?? 0) + 1;
+      await this.api.spreadsheets.values.update({
+        spreadsheetId: config.google.sheetId,
+        range: `${TRANSACTIONS_TAB}!A${nextRow}`,
         valueInputOption: "RAW",
-        insertDataOption: "INSERT_ROWS",
         requestBody: { values: appends },
       });
     }

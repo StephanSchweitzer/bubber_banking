@@ -10,6 +10,7 @@
     "snapshot": "tsx src/snapshot.ts",
     "periods": "tsx src/periods.ts",
     "reset-cursor": "tsx src/reset-cursor.ts",
+    "reset-transactions": "tsx src/reset-transactions.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

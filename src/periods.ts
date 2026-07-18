@@ -54,6 +54,17 @@ async function ensurePeriodTabs(
   return byTitle;
 }
 
+/**
+ * Whether a string is a real budgetable category worth seeding — not blank, not
+ * "Uncategorized", and not something numeric (a defensive guard so a column-shift
+ * bug can never again seed amounts like "-22.91" as budget categories).
+ */
+function isRealCategory(c: string): boolean {
+  if (!c || c === "Uncategorized") return false;
+  if (/^[-+$\d.,\s]+$/.test(c)) return false; // purely numeric / currency-ish
+  return true;
+}
+
 /** Read the whole Transactions ledger into LedgerTxn rows (source of truth). */
 async function readLedger(api: sheets_v4.Sheets): Promise<LedgerTxn[]> {
   const res = await api.spreadsheets.values.get({
@@ -107,7 +118,7 @@ export async function renderPeriods(accounts?: AccountSnapshot[]): Promise<void>
   await ensureBudgetTab(api, tabIds);
   const { targets, knownCategories } = await readBudget(api);
   const ledgerCategories = new Set(
-    ledger.map((t) => t.category).filter((c) => c && c !== "Uncategorized")
+    ledger.map((t) => t.category).filter(isRealCategory)
   );
   const added = await seedCategories(api, knownCategories, ledgerCategories);
   if (added.length > 0) {
