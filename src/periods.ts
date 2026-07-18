@@ -2,7 +2,7 @@ import { google, sheets_v4 } from "googleapis";
 import { config, PERIOD_TABS, TRANSACTIONS_TAB } from "./config";
 import { readTokens } from "./tokens";
 import { AccountSnapshot, Cadence, fetchSnapshot } from "./balances";
-import { buildPeriodView, LedgerTxn } from "./period-view";
+import { buildPeriodView, humanizeCategory, LedgerTxn } from "./period-view";
 import { PeriodSheet } from "./period-sheet";
 import { ensureBudgetTab, readBudget, seedCategories } from "./budget";
 
@@ -74,7 +74,10 @@ async function readLedger(api: sheets_v4.Sheets): Promise<LedgerTxn[]> {
       name: String(r[2] ?? ""),
       merchant: String(r[3] ?? ""),
       amount: Number.isFinite(amount) ? amount : 0,
-      category: String(r[5] ?? "").trim(),
+      // Humanize defensively at read time (idempotent): older rows written before
+      // the sync started humanizing still hold raw enums like FOOD_AND_DRINK, and
+      // the views + budget seeding should treat both forms identically.
+      category: humanizeCategory(String(r[5] ?? "").trim()),
       account: String(r[6] ?? "").trim(),
       institution: String(r[7] ?? "").trim(),
     });

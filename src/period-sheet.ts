@@ -70,6 +70,18 @@ export class PeriodSheet {
         requests: [
           { unmergeCells: { range: { sheetId } } },
           {
+            // These tabs may carry a frozen row/column from their previous life
+            // as balance grids; unfreeze so section bands can merge across all
+            // five columns (Sheets forbids merging a frozen with a non-frozen col).
+            updateSheetProperties: {
+              properties: {
+                sheetId,
+                gridProperties: { frozenRowCount: 0, frozenColumnCount: 0 },
+              },
+              fields: "gridProperties(frozenRowCount,frozenColumnCount)",
+            },
+          },
+          {
             repeatCell: {
               range: {
                 sheetId,
